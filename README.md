@@ -18,7 +18,7 @@ Plain semantic navigation answers *"where can I go that matches the user's inten
 - **Cross-run route biasing**: candidate routes are scored using geometry cost + semantic objective + segment-conditioned risk penalty + recency decay + observation count.
 - **Evidence-grounded explanations**: route choices cite the specific stored events that drove the decision. No free-form LLM rationalization required for the MVP.
 
-The contribution is the integration. Each ingredient is prior art (see `docs/prior_art.md`); their combination on a deployable Go2 stack with explainable output is, to our knowledge, not demonstrated end-to-end.
+The contribution is the integration. Each ingredient is prior art (see `docs/prior_art.md`); their combination, *Go2-targeted but currently hardware-unverified*, is, to our knowledge, not demonstrated end-to-end. No claim of "running on Go2" — see Validation status below.
 
 ## Architecture
 

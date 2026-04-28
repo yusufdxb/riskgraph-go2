@@ -29,6 +29,7 @@ def core_event_from_msg(msg: Any) -> RiskEvent:
         confidence=float(msg.confidence),
         timestamp=float(msg.header.stamp.sec) + float(msg.header.stamp.nanosec) * 1e-9,
         frame_id=str(msg.header.frame_id) or "map",
+        segment_id=(str(msg.segment_id) if getattr(msg, "segment_id", "") else None),
     )
 
 

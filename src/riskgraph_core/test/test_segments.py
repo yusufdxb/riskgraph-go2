@@ -42,3 +42,26 @@ def test_segment_for_point_handles_endpoint_proximity():
 
 def test_segment_for_point_returns_none_for_empty():
     assert segment_for_point([], (1.0, 1.0, 0.0)) is None
+
+
+def test_segment_for_point_handles_degenerate_zero_length_segment():
+    # When a segment has start == end, the distance must collapse to dist-to-point
+    # rather than dividing by zero.
+    segments = [_seg("a", 5.0, 5.0, 5.0, 5.0)]
+    nearest = segment_for_point(segments, (5.0, 5.0, 0.0))
+    assert nearest.segment_id == "a"
+    nearest = segment_for_point(segments, (10.0, 10.0, 0.0))
+    assert nearest.segment_id == "a"
+
+
+def test_segment_for_point_picks_correctly_with_near_collinear_segments():
+    # Two parallel segments separated by a small gap — the nearest must be
+    # selected unambiguously even when the offset is small.
+    segments = [
+        _seg("a", 0.0, 0.0, 10.0, 0.0),
+        _seg("b", 0.0, 0.05, 10.0, 0.05),
+    ]
+    nearest = segment_for_point(segments, (5.0, 0.06, 0.0))
+    assert nearest.segment_id == "b"
+    nearest = segment_for_point(segments, (5.0, -0.01, 0.0))
+    assert nearest.segment_id == "a"

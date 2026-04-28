@@ -6,7 +6,7 @@ Running record of audit checkpoints, findings, and how each was resolved. Three 
 
 **Trigger:** post-`riskgraph_msgs` + `riskgraph_core` + architecture doc.
 **Audit prompt:** `docs/audits/codex_architecture_audit_prompt.md`
-**Auditor:** internal (also queued for `codex exec` review).
+**Auditor:** internal pass + Codex CLI (`codex exec`) ran 2026-04-28 against the post-implementation tree (HEAD `4046b04`).
 
 ### Findings (internal pass)
 
@@ -18,11 +18,27 @@ Running record of audit checkpoints, findings, and how each was resolved. Three 
 | A-4 | LOW      | `riskgraph_core/scoring.py`                        | Semantic match is substring on label only — does not match the upstream `SemanticDetection.embedding` vector path.                                       | DOCUMENTED in `docs/architecture.md` "Scoring model" as MVP scope. v0.2 plug-in slot identified. |
 | A-5 | MED      | `riskgraph_core/store.py:RiskStore.record_event`   | `DELETE` + `INSERT` in `risk_factor` is not wrapped in an explicit transaction. A concurrent reader could observe an event with no factors.               | MITIGATED by `events_for_segment` skipping events with empty factor lists. Real fix (BEGIN/COMMIT) tracked in v0.2. |
 
+### Codex findings (HEAD `4046b04`)
+
+| ID    | Severity | Finding                                                                                                                                                       | Resolution |
+|-------|----------|---------------------------------------------------------------------------------------------------------------------------------------------------------------|------------|
+| C-H1  | HIGH     | ROS-ingested events cannot reliably become segment-keyed: no `segment_id` field in `RiskEvent.msg`, no segment registry topic, unjoined events stored unbound. | FIXED 2026-04-28: added `segment_id` field to `riskgraph_msgs/msg/RiskEvent.msg`; conversions plumb through; synthetic publisher populates it; verified on-disk via `sqlite3` after live launch (4 rows, all with `segment_id='glossy'`). |
+| C-H2  | HIGH     | `default.yaml` started memory + planner + explainer with separate `:memory:` SQLite stores → planner could never see the memory node's writes.                | FIXED 2026-04-28: `store_path` in `default.yaml` now `/tmp/riskgraph_store.sqlite` shared by all three nodes. Verified by inspecting the file after `ros2 launch riskgraph_bringup demo_offline.launch.py`. |
+| C-H3  | HIGH     | Adapters stamp every event as `map @ (0,0,0)` because they have no pose source. Once segment registration is wired up, this poisons the spatial join.         | PARTIALLY MITIGATED: with `segment_id` now in the IDL, adapters can be extended to set the segment id directly when they know it (e.g. tactile_adapter at the moment of slip can be paired with current segment). For real upstream events without that info, this remains a known v0.2 gap; documented in `docs/hardware_integration.md`. |
+| C-H4  | HIGH     | `docs/hardware_integration.md` claimed SQLite WAL handles concurrent processes, but the code never enabled WAL or busy_timeout.                              | FIXED 2026-04-28: `RiskStore.__init__` now sets `PRAGMA journal_mode=WAL`, `busy_timeout=2000`, `synchronous=NORMAL`. Added `test_concurrent_reader_sees_atomic_event_writes` regression. |
+| C-M1  | MED      | SQLite write failures could escape the subscription callback and kill ingestion.                                                                              | FIXED: `_on_event` wraps `record_event` in try/except, logs and continues. `record_event` itself uses a `BEGIN IMMEDIATE` transaction with rollback-on-error. |
+| C-M2  | MED      | QoS hard-coded `RELIABLE`; may not match upstream best-effort sensor publishers.                                                                              | DEFERRED to v0.2. RELIABLE is the safer default for our event-shaped (low-rate) traffic; mismatch with a real best-effort publisher will manifest as "no events received" and is detectable. To make per-adapter QoS a parameter when a real upstream is wired. |
+| C-M3  | MED      | "deployable Go2 stack" / "on Go2" wording overstated novelty.                                                                                                 | FIXED: README and `docs/prior_art.md` now read "Go2-targeted but currently hardware-unverified" with explicit "no claim of running on Go2" line. |
+| C-M4  | MED      | `RouteSegment.length_m` is decorative.                                                                                                                        | DOCUMENTED in `docs/architecture.md` and `docs/hardware_integration.md`. Acceptable: keeping the field on the wire is harmless and protocol-clearer than a missing field. |
+| C-M5  | MED      | Explainer node subscribed to `/riskgraph/route_scores` but planner never published it.                                                                        | FIXED: `PlannerNode` now publishes the score array on `/riskgraph/route_scores` after each service call so streaming consumers actually receive data. |
+| C-L1  | LOW      | Tie resolution in `score_routes` is silent (input order); no tie-aware explanation.                                                                           | DOCUMENTED. `test_score_routes_resolves_ties_by_input_order` pins current behaviour; tie-aware explanation can wait for a real failure case. |
+| C-L2  | LOW      | Test coverage missed degenerate spatial joins, concurrent SQLite, zero candidates, ties.                                                                      | FIXED: added `test_segment_for_point_handles_degenerate_zero_length_segment`, `test_segment_for_point_picks_correctly_with_near_collinear_segments`, `test_score_routes_handles_zero_candidates`, `test_score_routes_resolves_ties_by_input_order`, `test_concurrent_reader_sees_atomic_event_writes`. 38 tests total now. |
+
 ### Highest-leverage fixes (next pass)
 
-1. Make adapters TF-aware so `RiskEvent.position` is populated; otherwise the spatial-join pillar is structurally weak.
-2. Wrap `record_event` in an explicit SQLite transaction.
-3. Replace substring semantic match with embedding-based match once upstream `SemanticDetection.embedding` is consumed.
+1. Make adapters TF-aware so `RiskEvent.position` is populated *and/or* segment_id-pre-tagged from a paired pose subscription. Without it, real upstream events still don't map to a segment.
+2. Replace substring semantic match with embedding-based match once upstream `SemanticDetection.embedding` is consumed.
+3. Decide whether `evidence_for_segment` should default to scoring's decay or stay raw — consistency.
 
 ## Checkpoint 2 — Midpoint (post-core, post-planner)
 

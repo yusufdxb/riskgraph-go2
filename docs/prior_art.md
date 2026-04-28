@@ -71,7 +71,7 @@ A scoped scan of adjacent literature to bound what RiskGraph-Go2 (persistent rou
 2. biases segment selection across sessions, not just within a single costmap;
 3. emits deterministic, evidence-grounded justifications citing specific stored events.
 
-The contribution is the *integration*: typed cross-run incident log feeding both the planner and the explainer on a deployable quadruped stack. Each ingredient exists; the combination has not been demonstrated end-to-end on Go2 in the surveyed literature.
+The contribution is the *integration*: typed cross-run incident log feeding both the planner and the explainer on a Go2-targeted (hardware-unverified) quadruped stack. Each ingredient exists; the combination has not been demonstrated end-to-end on Go2 in the surveyed literature, and we make no claim of having yet demonstrated it on hardware.
 
 **Cannot claim.** Risk-aware planning, costmap layering, semantic / open-vocab navigation, scene graphs, experience maps, GP traversability, fault-aware locomotion, OOD recovery, LLM explanations of robot behavior, proprioceptive slip detection — all prior art.
 

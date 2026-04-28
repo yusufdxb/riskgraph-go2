@@ -49,38 +49,54 @@ class RiskStore:
 
     def __init__(self, path: str = ":memory:") -> None:
         self._path = path
-        self._conn = sqlite3.connect(path, check_same_thread=False)
+        self._conn = sqlite3.connect(path, check_same_thread=False, timeout=5.0)
+        # WAL + a busy_timeout let multiple processes (memory_node writes,
+        # planner_node reads) share a single file safely. WAL is a no-op for
+        # `:memory:` databases but the PRAGMA succeeds, so we leave it in.
+        self._conn.execute("PRAGMA journal_mode=WAL")
+        self._conn.execute("PRAGMA busy_timeout=2000")
+        self._conn.execute("PRAGMA synchronous=NORMAL")
         self._conn.executescript(_SCHEMA)
         self._conn.commit()
 
     # -- write path -----------------------------------------------------------
 
     def record_event(self, event: RiskEvent) -> None:
+        # Wrap the event + factor writes in a single transaction so a concurrent
+        # reader can't observe an event row with no factors (which would have
+        # been silently dropped by `events_for_segment`).
         cur = self._conn.cursor()
-        cur.execute(
-            "INSERT OR REPLACE INTO risk_event "
-            "(event_id, timestamp, position_x, position_y, position_z, frame_id, segment_id, confidence) "
-            "VALUES (?,?,?,?,?,?,?,?)",
-            (
-                event.event_id,
-                event.timestamp,
-                event.position[0], event.position[1], event.position[2],
-                event.frame_id,
-                event.segment_id,
-                event.confidence,
-            ),
-        )
-        # Replace factors for this event id (idempotent if record_event is replayed).
-        cur.execute("DELETE FROM risk_factor WHERE event_id = ?", (event.event_id,))
-        cur.executemany(
-            "INSERT INTO risk_factor (event_id, category, severity, source, detail) "
-            "VALUES (?,?,?,?,?)",
-            [
-                (event.event_id, f.category.value, f.severity, f.source, f.detail)
-                for f in event.factors
-            ],
-        )
-        self._conn.commit()
+        try:
+            cur.execute("BEGIN IMMEDIATE")
+            cur.execute(
+                "INSERT OR REPLACE INTO risk_event "
+                "(event_id, timestamp, position_x, position_y, position_z, frame_id, segment_id, confidence) "
+                "VALUES (?,?,?,?,?,?,?,?)",
+                (
+                    event.event_id,
+                    event.timestamp,
+                    event.position[0], event.position[1], event.position[2],
+                    event.frame_id,
+                    event.segment_id,
+                    event.confidence,
+                ),
+            )
+            cur.execute("DELETE FROM risk_factor WHERE event_id = ?", (event.event_id,))
+            cur.executemany(
+                "INSERT INTO risk_factor (event_id, category, severity, source, detail) "
+                "VALUES (?,?,?,?,?)",
+                [
+                    (event.event_id, f.category.value, f.severity, f.source, f.detail)
+                    for f in event.factors
+                ],
+            )
+            self._conn.commit()
+        except sqlite3.Error:
+            try:
+                self._conn.rollback()
+            except sqlite3.Error:
+                pass
+            raise
 
     # -- read path ------------------------------------------------------------
 
