@@ -1,0 +1,22 @@
+{
+  "name": "glossy_hallway",
+  "description": "Two routes between the same start and goal. SHORT goes through a glossy hallway with a recorded slip history; LONG is one segment longer but has no risk history. The planner should pick LONG when risk weighting is non-trivial.",
+  "segments": {
+    "glossy":  {"start": [0.0, 0.0, 0.0], "end": [4.0, 0.0, 0.0], "label": "hallway-east"},
+    "safe-a":  {"start": [0.0, 0.0, 0.0], "end": [3.0, 3.0, 0.0], "label": "hallway-north"},
+    "safe-b":  {"start": [3.0, 3.0, 0.0], "end": [4.0, 0.0, 0.0], "label": "hallway-east"}
+  },
+  "routes": [
+    {"route_id": "SHORT", "segments": ["glossy"]},
+    {"route_id": "LONG",  "segments": ["safe-a", "safe-b"]}
+  ],
+  "events": [
+    {"event_id": "ev_slip_1", "segment_id": "glossy", "category": "SLIP",   "severity": 0.9, "source": "tactile/slip_state", "age_s": 30.0},
+    {"event_id": "ev_slip_2", "segment_id": "glossy", "category": "SLIP",   "severity": 0.8, "source": "tactile/slip_state", "age_s": 90.0},
+    {"event_id": "ev_safe_1", "segment_id": "glossy", "category": "SAFETY", "severity": 0.6, "source": "go2/safety_alert",   "age_s": 60.0},
+    {"event_id": "ev_aud_1",  "segment_id": "glossy", "category": "AUDIO",  "severity": 0.4, "source": "come_here/audio",    "age_s": 120.0}
+  ],
+  "weights": {"geometry": 1.0, "semantic": 0.0, "risk": 4.0, "decay_half_life_s": 1800.0},
+  "expected_choice": "LONG",
+  "expected_explanation_keywords": ["slip", "glossy"]
+}
