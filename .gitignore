@@ -1,0 +1,26 @@
+# Build/install
+build/
+install/
+log/
+*.egg-info/
+__pycache__/
+*.pyc
+.pytest_cache/
+.colcon/
+.cache/
+
+# Editor
+.vscode/
+.idea/
+*.swp
+
+# Local artifacts
+*.sqlite
+*.sqlite-journal
+demo_results.json
+demo_results.csv
+.coverage
+coverage.xml
+
+# OS
+.DS_Store
