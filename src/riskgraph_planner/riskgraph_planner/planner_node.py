@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import rclpy
 from rclpy.node import Node
+from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
 from std_msgs.msg import Header
 
 from riskgraph_msgs.srv import ScoreRoutes
@@ -36,6 +37,11 @@ class PlannerNode(Node):
         store_path = self.get_parameter("store_path").get_parameter_value().string_value
         self._store = RiskStore(store_path)
 
+        qos = QoSProfile(reliability=ReliabilityPolicy.RELIABLE,
+                         history=HistoryPolicy.KEEP_LAST, depth=10)
+        self._scores_pub = self.create_publisher(
+            RouteScoreArrayMsg, "/riskgraph/route_scores", qos
+        )
         self._srv = self.create_service(
             ScoreRoutes, "/riskgraph/score_routes", self._on_score
         )
@@ -87,6 +93,10 @@ class PlannerNode(Node):
 
         response.result = arr
         response.explanation = exp_msg
+        # Also publish the score array on the topic so streaming consumers
+        # (e.g. riskgraph_explainer_node, UI overlays) can react without
+        # making their own service call.
+        self._scores_pub.publish(arr)
         return response
 
     def destroy_node(self) -> bool:

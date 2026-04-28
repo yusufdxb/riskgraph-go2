@@ -1,14 +1,22 @@
 # Default RiskGraph-Go2 parameters.
 # Loaded by both demo_offline.launch.py and integration.launch.py.
+#
+# `store_path` MUST be the same string for `riskgraph_memory` and `riskgraph_planner`
+# (and `riskgraph_explainer` if running). They open the same SQLite file: the memory
+# node writes, the planner/explainer read. SQLite WAL mode (set automatically by
+# riskgraph_core.RiskStore) makes that safe.
+#
+# /tmp is launch-scoped enough for the demo and survives the short stack lifetime.
+# For Jetson production, override to a persistent NVMe path — see docs/hardware_integration.md.
 
 riskgraph_memory:
   ros__parameters:
-    store_path: ":memory:"
+    store_path: "/tmp/riskgraph_store.sqlite"
     decay_half_life_s: 1800.0   # 30 min — older events fade
 
 riskgraph_planner:
   ros__parameters:
-    store_path: ":memory:"
+    store_path: "/tmp/riskgraph_store.sqlite"
     weight_geometry: 1.0
     weight_semantic: 1.0
     weight_risk: 4.0
@@ -16,7 +24,7 @@ riskgraph_planner:
 
 riskgraph_explainer:
   ros__parameters:
-    store_path: ":memory:"
+    store_path: "/tmp/riskgraph_store.sqlite"
     input_topic: "/riskgraph/route_scores"
     output_topic: "/riskgraph/explanations"
 

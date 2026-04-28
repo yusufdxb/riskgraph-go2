@@ -61,6 +61,7 @@ class SyntheticPublisher(Node):
         msg.header.stamp.nanosec = max(0, min(999_999_999, nsec))
         msg.header.frame_id = ev.frame_id
         msg.event_id = ev.event_id
+        msg.segment_id = ev.segment_id or ""
         p = Point()
         p.x, p.y, p.z = ev.position
         msg.position = p

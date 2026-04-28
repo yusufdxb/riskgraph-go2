@@ -5,5 +5,6 @@
 std_msgs/Header header
 string event_id                    # uuid4 string; assigned by the emitter
 geometry_msgs/Point position       # robot or hazard location at event time, in header.frame_id
+string segment_id                  # optional pre-assigned route segment id; "" lets the memory node spatial-join
 RiskFactor[] factors               # one or more contributing factors
 float32 confidence                 # [0,1] — confidence the event is real

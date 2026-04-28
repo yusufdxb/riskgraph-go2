@@ -80,3 +80,24 @@ def test_unknown_segment_yields_zero_risk():
     assert risk == 0.0
     assert count == 0
     assert dominant == ""
+
+
+def test_concurrent_reader_sees_atomic_event_writes(tmp_path):
+    """A second handle to the same DB must observe an event with all factors at once,
+    not a half-written row with zero factors."""
+    db = tmp_path / "rg.sqlite"
+    writer = RiskStore(str(db))
+    reader = RiskStore(str(db))
+    # Pre-write some baseline
+    writer.record_event(_ev("e1", "seg-a", 0.4))
+    # Reader must see the event with its factor
+    risk, count, _ = reader.segment_risk("seg-a", now=time.time(), decay_half_life_s=0.0)
+    assert risk > 0.0
+    assert count == 1
+    # And subsequent writes are also visible after commit
+    writer.record_event(_ev("e2", "seg-a", 0.6))
+    risk2, count2, _ = reader.segment_risk("seg-a", now=time.time(), decay_half_life_s=0.0)
+    assert count2 == 2
+    assert risk2 > risk
+    writer.close()
+    reader.close()

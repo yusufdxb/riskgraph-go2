@@ -76,7 +76,12 @@ class RiskMemoryNode(Node):
             self.get_logger().debug(
                 f"event {ev.event_id} has no segment_id; storing unbound"
             )
-        self._store.record_event(ev)
+        try:
+            self._store.record_event(ev)
+        except Exception as exc:  # SQLite errors must not crash the subscription callback
+            self.get_logger().error(
+                f"failed to persist RiskEvent {ev.event_id}: {exc}"
+            )
 
     def _on_query(self, request: QuerySegmentRisk.Request,
                   response: QuerySegmentRisk.Response) -> QuerySegmentRisk.Response:

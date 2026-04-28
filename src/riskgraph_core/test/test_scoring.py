@@ -84,6 +84,27 @@ def test_dominant_segment_and_factor_are_populated_on_risky_route():
     assert FactorCategory.SAFETY.value in score.dominant_factor_categories
 
 
+def test_score_routes_handles_zero_candidates():
+    """Defensive: scoring an empty candidate list must not crash."""
+    store = RiskStore(":memory:")
+    weights = ScoringWeights()
+    result = score_routes([], store, weights, "")
+    assert result.scores == []
+    assert result.chosen_route_id == ""
+
+
+def test_score_routes_resolves_ties_by_input_order():
+    """When two candidates have identical cost, the first one in the input list wins."""
+    store = RiskStore(":memory:")
+    a = Route(route_id="a", segments=[_seg("p", 5.0)])
+    b = Route(route_id="b", segments=[_seg("q", 5.0)])
+    weights = ScoringWeights(geometry=1.0, semantic=0.0, risk=1.0)
+    result_ab = score_routes([a, b], store, weights, "")
+    result_ba = score_routes([b, a], store, weights, "")
+    assert result_ab.chosen_route_id == "a"
+    assert result_ba.chosen_route_id == "b"
+
+
 def test_decay_reduces_old_event_influence():
     """Old events should weigh less than new events under exponential decay."""
     store = RiskStore(":memory:")
