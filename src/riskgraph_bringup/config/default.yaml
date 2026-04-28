@@ -1,0 +1,37 @@
+# Default RiskGraph-Go2 parameters.
+# Loaded by both demo_offline.launch.py and integration.launch.py.
+
+riskgraph_memory:
+  ros__parameters:
+    store_path: ":memory:"
+    decay_half_life_s: 1800.0   # 30 min — older events fade
+
+riskgraph_planner:
+  ros__parameters:
+    store_path: ":memory:"
+    weight_geometry: 1.0
+    weight_semantic: 1.0
+    weight_risk: 4.0
+    decay_half_life_s: 1800.0
+
+riskgraph_explainer:
+  ros__parameters:
+    store_path: ":memory:"
+    input_topic: "/riskgraph/route_scores"
+    output_topic: "/riskgraph/explanations"
+
+riskgraph_safety_adapter:
+  ros__parameters:
+    input_topic: "/go2/safety_alert"
+    output_topic: "/riskgraph/risk_events"
+
+riskgraph_helix_adapter:
+  ros__parameters:
+    input_topic: "/helix/faults"
+    output_topic: "/riskgraph/risk_events"
+
+riskgraph_tactile_adapter:
+  ros__parameters:
+    input_topic: "/tactile/slip_state"
+    output_topic: "/riskgraph/risk_events"
+    severity: 0.7
