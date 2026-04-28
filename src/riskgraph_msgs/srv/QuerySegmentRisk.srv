@@ -1,0 +1,7 @@
+# Query the cumulative risk for a list of segment ids.
+string[] segment_ids
+float32 decay_half_life_s          # if > 0, applies exponential decay to event severity
+---
+float32[] risks                    # one risk score per segment_id, same order
+uint32[] event_counts              # number of events backing each segment risk
+string[] dominant_factor_categories # most common factor category per segment (parallel array)
