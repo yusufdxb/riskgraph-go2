@@ -1,0 +1,6 @@
+# Score a list of candidate routes against the current risk store.
+Route[] candidates
+string semantic_objective          # optional, e.g. "kitchen", "exit"
+---
+RouteScoreArray result
+RouteExplanation explanation       # explanation for the chosen route
