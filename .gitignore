@@ -22,5 +22,8 @@ demo_results.csv
 .coverage
 coverage.xml
 
+# Hardware verification session artifacts (verdicts/bags/logs)
+tests/hw/runs/
+
 # OS
 .DS_Store
