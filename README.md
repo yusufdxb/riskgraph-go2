@@ -22,28 +22,38 @@ The contribution is the integration. Each ingredient is prior art (see `docs/pri
 
 ## Architecture
 
-```
-upstream Go2 stack (existing)            RiskGraph-Go2 (this repo)
-─────────────────────────────────       ───────────────────────────────────────
-/go2/safety_alert     ─────┐
-/helix/faults         ─────┤            ┌─────────────────────────┐
-/tactile/slip_state   ─────┼──adapter──▶│ riskgraph_memory        │
-/come_here/audio_dir  ─────┤            │  (SQLite-backed,        │
-/semantic/detections  ─────┘            │   segment-keyed)        │
-                                        └────────────┬────────────┘
-                                                     │ ScoreRoute srv
-                                        ┌────────────┴────────────┐
-candidate routes (Nav2 / synthetic) ──▶ │ riskgraph_planner       │
-                                        │  geometry + semantic +  │
-                                        │  risk + decay scoring   │
-                                        └────────────┬────────────┘
-                                                     │ /riskgraph/route_scores
-                                        ┌────────────┴────────────┐
-                                        │ riskgraph_explainer     │
-                                        │  evidence-grounded      │
-                                        │  template explanations  │
-                                        └────────────┬────────────┘
-                                                     ▼ /riskgraph/explanations
+```mermaid
+graph TD
+    subgraph upstream["upstream Go2 stack (existing)"]
+        T1["/go2/safety_alert"]
+        T2["/helix/faults"]
+        T3["/tactile/slip_state"]
+        T4["/come_here/audio_dir"]
+        T5["/semantic/detections"]
+    end
+
+    ADP[["adapter"]]
+
+    subgraph riskgraph["RiskGraph-Go2 (this repo)"]
+        MEM["riskgraph_memory<br/>(SQLite-backed,<br/>segment-keyed)"]
+        PLN["riskgraph_planner<br/>geometry + semantic +<br/>risk + decay scoring"]
+        EXP["riskgraph_explainer<br/>evidence-grounded<br/>template explanations"]
+    end
+
+    ROUTES["candidate routes<br/>(Nav2 / synthetic)"]
+    OUT(["/riskgraph/explanations"])
+
+    T1 --> ADP
+    T2 --> ADP
+    T3 --> ADP
+    T4 --> ADP
+    T5 --> ADP
+    ADP --> MEM
+
+    MEM -- "ScoreRoute srv" --> PLN
+    ROUTES --> PLN
+    PLN -- "/riskgraph/route_scores" --> EXP
+    EXP --> OUT
 ```
 
 Pure-Python core (`riskgraph_core`) holds the model logic and is testable without ROS; ROS nodes are thin adapters around it.
