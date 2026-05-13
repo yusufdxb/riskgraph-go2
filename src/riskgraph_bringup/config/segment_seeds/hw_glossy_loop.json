@@ -1,0 +1,18 @@
+{
+  "version": "1",
+  "frame_id": "map",
+  "segments": [
+    {
+      "segment_id": "hw_glossy",
+      "start": [0.0, 0.0, 0.0],
+      "end":   [4.0, 0.0, 0.0],
+      "semantic_label": "hallway-glossy"
+    },
+    {
+      "segment_id": "hw_safe",
+      "start": [0.0, 2.0, 0.0],
+      "end":   [4.0, 2.0, 0.0],
+      "semantic_label": "hallway-safe"
+    }
+  ]
+}

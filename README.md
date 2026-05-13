@@ -90,6 +90,47 @@ ros2 launch riskgraph_bringup integration.launch.py \
 
 Adapters subscribe to upstream topics and forward into RiskGraph. See `docs/hardware_integration.md` for topic wiring and required upstream packages.
 
+### Seed known route segments (phase 1)
+
+`riskgraph_memory` accepts a `segment_seed_path` ROS parameter. When set,
+it loads a JSON (or YAML) file describing the named route segments in the
+operating environment, so that incoming `RiskEvent`s without a stamped
+`segment_id` get spatially-joined to the nearest seed segment before
+persistence. Without a seed, such events are stored unbound and the
+planner cannot retrieve them by id.
+
+A sample seed for the hw glossy-loop scenario is installed at
+`share/riskgraph_bringup/config/segment_seeds/hw_glossy_loop.json`.
+To use it from the integration launch, point `default.yaml` at the file:
+
+```yaml
+riskgraph_memory:
+  ros__parameters:
+    segment_seed_path: "/path/to/segment_seeds/hw_glossy_loop.json"
+```
+
+Schema (JSON):
+
+```json
+{
+  "version": "1",
+  "frame_id": "map",
+  "segments": [
+    {
+      "segment_id": "hw_glossy",
+      "start": [0.0, 0.0, 0.0],
+      "end":   [4.0, 0.0, 0.0],
+      "semantic_label": "hallway-glossy"
+    }
+  ]
+}
+```
+
+Overlapping `segment_id` entries use last-write-wins; the node logs the
+duplicates at WARN. A malformed seed file is loud (ERROR) but non-fatal:
+the memory node starts with an empty `known_segments` list rather than
+crashing the launch.
+
 ## Validation status
 
 - **Verified offline:** core risk model unit tests, persistence round-trip, route-scoring regression (safer route is selected over shorter risky route), template explanation cites the dominant risk factor, deterministic synthetic demo.

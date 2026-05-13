@@ -6,7 +6,7 @@ package_name = 'riskgraph_bringup'
 
 setup(
     name=package_name,
-    version='0.1.0',
+    version='0.1.1',
     packages=[],
     py_modules=[],
     data_files=[
@@ -17,6 +17,8 @@ setup(
             glob('launch/*.launch.py')),
         (os.path.join('share', package_name, 'config'),
             glob('config/*.yaml')),
+        (os.path.join('share', package_name, 'config', 'segment_seeds'),
+            glob('config/segment_seeds/*.json')),
     ],
     install_requires=['setuptools'],
     zip_safe=True,
