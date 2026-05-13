@@ -12,7 +12,11 @@
 riskgraph_memory:
   ros__parameters:
     store_path: "/tmp/riskgraph_store.sqlite"
-    decay_half_life_s: 1800.0   # 30 min — older events fade
+    decay_half_life_s: 1800.0   # 30 min, older events fade
+    # Absolute path to a segment-seed JSON/YAML file. Empty string disables
+    # seeding (events without an emitter-stamped segment_id get stored unbound).
+    # See docs/segment_seeding.md and src/riskgraph_bringup/config/segment_seeds/.
+    segment_seed_path: ""
 
 riskgraph_planner:
   ros__parameters:

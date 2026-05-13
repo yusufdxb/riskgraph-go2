@@ -11,6 +11,13 @@ from .store import RiskStore
 from .scoring import ScoringWeights, score_routes, RouteScoreResult
 from .explainer import explain_choice, ExplanationTemplate
 from .config import load_config, Config
+from .seed import (
+    SegmentSeedError,
+    SegmentSeedResult,
+    parse_segment_seed,
+    load_segment_seed,
+    merge_segment_seeds,
+)
 
 __all__ = [
     "RiskFactor",
@@ -27,4 +34,9 @@ __all__ = [
     "ExplanationTemplate",
     "load_config",
     "Config",
+    "SegmentSeedError",
+    "SegmentSeedResult",
+    "parse_segment_seed",
+    "load_segment_seed",
+    "merge_segment_seeds",
 ]
