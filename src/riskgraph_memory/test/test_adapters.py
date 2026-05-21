@@ -256,14 +256,42 @@ def _make_helix_msgs_stub() -> ModuleType:
 # ---------- import context manager ----------
 
 
+class _BlockingFinder:
+    """A sys.meta_path finder that forces named packages to be unimportable.
+
+    Popping a name out of sys.modules does NOT hide a package that is
+    genuinely installed on sys.path (e.g. go2_msgs from a sourced ROS
+    workspace). Without this, the `have_go2=False` / `have_helix=False`
+    code paths only exercise the "missing" branch on machines where the
+    upstream package happens not to be installed, which makes the suite
+    pass or fail depending on the ambient environment. This finder makes
+    the "missing soft dependency" case deterministic.
+    """
+
+    def __init__(self, blocked):
+        # Block the package and any submodule under it (e.g. go2_msgs.msg).
+        self._blocked = tuple(blocked)
+
+    def find_spec(self, fullname, path=None, target=None):
+        for name in self._blocked:
+            if fullname == name or fullname.startswith(name + "."):
+                raise ModuleNotFoundError(
+                    f"{fullname} blocked by test fixture", name=fullname
+                )
+        return None
+
+
 @contextmanager
 def _stubbed_imports(have_go2: bool = True, have_helix: bool = True):
     """Install ROS / msg stubs into sys.modules for the duration of the block.
 
     `have_go2` / `have_helix` toggle whether the soft-dep upstream packages are
-    findable on the import path. When False, we leave sys.modules untouched
-    for that name so the adapter's `from go2_msgs.msg import SafetyAlert`
-    raises ImportError as it would on a Jetson without the package.
+    findable on the import path. When False, we both drop any cached module
+    entry AND install a `sys.meta_path` finder that raises
+    `ModuleNotFoundError` for that name, so the adapter's
+    `from go2_msgs.msg import SafetyAlert` fails exactly as it would on a
+    Jetson without the package, regardless of whether the host has the
+    upstream workspace sourced.
     """
     saved = {
         name: sys.modules.get(name)
@@ -296,6 +324,7 @@ def _stubbed_imports(have_go2: bool = True, have_helix: bool = True):
     sys.modules["riskgraph_msgs.msg"] = rgm.msg
     sys.modules["riskgraph_msgs.srv"] = rgm.srv
 
+    blocked = []
     if have_go2:
         g = _make_go2_msgs_stub()
         sys.modules["go2_msgs"] = g
@@ -303,6 +332,7 @@ def _stubbed_imports(have_go2: bool = True, have_helix: bool = True):
     else:
         sys.modules.pop("go2_msgs", None)
         sys.modules.pop("go2_msgs.msg", None)
+        blocked.append("go2_msgs")
     if have_helix:
         h = _make_helix_msgs_stub()
         sys.modules["helix_msgs"] = h
@@ -310,6 +340,13 @@ def _stubbed_imports(have_go2: bool = True, have_helix: bool = True):
     else:
         sys.modules.pop("helix_msgs", None)
         sys.modules.pop("helix_msgs.msg", None)
+        blocked.append("helix_msgs")
+
+    # Make the "missing soft dependency" case deterministic: a genuinely
+    # installed go2_msgs/helix_msgs on sys.path would otherwise still import.
+    finder = _BlockingFinder(blocked) if blocked else None
+    if finder is not None:
+        sys.meta_path.insert(0, finder)
 
     # Force re-import of adapter modules. Drop both the submodule entry in
     # sys.modules AND the attribute on the parent package, otherwise
@@ -330,6 +367,9 @@ def _stubbed_imports(have_go2: bool = True, have_helix: bool = True):
     try:
         yield
     finally:
+        # Remove the import-blocking finder first so restored modules import.
+        if finder is not None and finder in sys.meta_path:
+            sys.meta_path.remove(finder)
         # Restore.
         for k, v in saved.items():
             if v is None:
