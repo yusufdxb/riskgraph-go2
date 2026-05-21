@@ -15,7 +15,8 @@ riskgraph_memory:
     decay_half_life_s: 1800.0   # 30 min, older events fade
     # Absolute path to a segment-seed JSON/YAML file. Empty string disables
     # seeding (events without an emitter-stamped segment_id get stored unbound).
-    # See docs/segment_seeding.md and src/riskgraph_bringup/config/segment_seeds/.
+    # See the "Seed known route segments" section of README.md and the sample
+    # under src/riskgraph_bringup/config/segment_seeds/.
     segment_seed_path: ""
 
 riskgraph_planner:
