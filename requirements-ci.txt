@@ -1,0 +1,10 @@
+# CI-only runtime + test dependencies for the pure-Python unit suite.
+#
+# The unit tests under src/*/test exercise the pure-Python core
+# (riskgraph_core, riskgraph_memory, riskgraph_demo). ROS modules
+# (rclpy, geometry_msgs, std_msgs, riskgraph_msgs) are stubbed in
+# sys.modules by the tests themselves, so no colcon/rclpy build is
+# required. The only third-party runtime dependency is PyYAML
+# (config.py / seed.py).
+pytest>=7
+pyyaml>=6
