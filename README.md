@@ -2,7 +2,7 @@
 
 **Experience-grounded semantic navigation for a safer robotic guide dog.**
 
-A ROS 2 Humble overlay that gives the Unitree Go2 a persistent, multi-modal memory of where it has previously experienced trouble — slip, safety alerts, audio anomalies, depth hazards, near-collisions — and uses that memory to bias route selection toward safer paths and emit human-readable justifications for why one route was chosen over another.
+A ROS 2 Humble overlay that gives the Unitree Go2 a persistent, multi-modal memory of where it has previously experienced trouble, slip, safety alerts, audio anomalies, depth hazards, near-collisions, and uses that memory to bias route selection toward safer paths and emit human-readable justifications for why one route was chosen over another.
 
 This repo is a sibling to (not a fork of) the existing Go2 stack: `GO2-seeing-eye-dog`, `go2-semantic-nav`, `helix`, `come-here`, `neuroskin`, `openvocab-tsdf`. It consumes their topics; it does not replace them.
 
@@ -14,11 +14,11 @@ Plain semantic navigation answers *"where can I go that matches the user's inten
 
 ## Novelty (vs. plain semantic nav)
 
-- A **persistent, multi-modal incident log** keyed to topological route segments — slip flags, safety-mode triggers, depth-hazard hits, audio anomalies, near-collision counters — survives across runs.
+- A **persistent, multi-modal incident log** keyed to topological route segments, slip flags, safety-mode triggers, depth-hazard hits, audio anomalies, near-collision counters, survives across runs.
 - **Cross-run route biasing**: candidate routes are scored using geometry cost + semantic objective + segment-conditioned risk penalty + recency decay + observation count.
 - **Evidence-grounded explanations**: route choices cite the specific stored events that drove the decision. No free-form LLM rationalization required for the MVP.
 
-The contribution is the integration. Each ingredient is prior art (see `docs/prior_art.md`); their combination, *Go2-targeted but currently hardware-unverified*, is, to our knowledge, not demonstrated end-to-end. No claim of "running on Go2" — see Validation status below.
+The contribution is the integration. Each ingredient is prior art (see `docs/prior_art.md`); their combination, *Go2-targeted but currently hardware-unverified*, is, to our knowledge, not demonstrated end-to-end. No claim of "running on Go2", see Validation status below.
 
 ## Architecture
 
@@ -144,12 +144,12 @@ crashing the launch.
 ## Validation status
 
 - **Verified offline:** core risk model unit tests, persistence round-trip, route-scoring regression (safer route is selected over shorter risky route), template explanation cites the dominant risk factor, deterministic synthetic demo.
-- **Inferred runtime behavior:** ROS adapter wiring against upstream topic names — code is exercised in unit tests with mocked publishers; no live ROS bag run yet.
+- **Inferred runtime behavior:** ROS adapter wiring against upstream topic names, code is exercised in unit tests with mocked publishers; no live ROS bag run yet.
 - **Hardware-dependent:** end-to-end behavior on Go2 + Jetson Orin NX with upstream stack live. Not yet performed. See `docs/validation.md` and `docs/hardware_integration.md`.
 
 ## Hardware proof boundary
 
-This repo does **not** claim to run on a Go2 yet. The MVP target is software-validated — offline demo green, unit tests green, integration launch verified to start nodes without errors. Hardware proof requires a CaresLab session and is tracked separately.
+This repo does **not** claim to run on a Go2 yet. The MVP target is software-validated, offline demo green, unit tests green, integration launch verified to start nodes without errors. Hardware proof requires a CaresLab session and is tracked separately.
 
 ## Layout
 

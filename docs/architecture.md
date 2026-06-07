@@ -56,7 +56,7 @@ These three goals must be met without coupling the core logic to ROS, so the sam
 
 ## Component responsibilities
 
-### `riskgraph_msgs` — interfaces
+### `riskgraph_msgs`: interfaces
 
 Custom IDL for risk events, route segments, route scores, and explanations.
 Built with `ament_cmake` and `rosidl_generate_interfaces`. No code logic.
@@ -64,19 +64,19 @@ The interface set is intentionally narrow; richer schemas (CLIP embeddings,
 3D bounding boxes, etc.) belong in upstream packages and are referenced via
 loose-typed `RiskFactor.detail` strings rather than baked into `riskgraph_msgs`.
 
-### `riskgraph_core` — pure-Python model
+### `riskgraph_core`: pure-Python model
 
 Five modules:
-- `events.py` — `RiskFactor`, `RiskEvent`, `FactorCategory`. Severity is clamped to [0,1]; unknown categories fall back to `OTHER`. `RiskEvent.aggregate_severity()` deliberately uses max-factor not sum, on the assumption that factors describe the same incident from different sensing modalities.
-- `segments.py` — `RouteSegment`, `Route`, `segment_for_point` (nearest-segment spatial join, used by the memory node when an incoming event has no pre-assigned segment).
-- `store.py` — `RiskStore` (SQLite-backed, schema in two tables: `risk_event` and `risk_factor`). Query path is segment-keyed and applies optional exponential decay at read time, so writes stay cheap. `:memory:` is supported for tests.
-- `scoring.py` — `score_routes(candidates, store, weights, semantic_objective)`. Returns `RouteScoreResult` with per-route breakdown of geometry / semantic / risk costs and dominant segment + factor categories. Lower `total_cost` wins.
-- `explainer.py` — `explain_choice(result, candidates, store)` produces a deterministic template-rendered explanation with `evidence_event_ids` cited verbatim. No LLM in the MVP path.
-- `config.py` — YAML loader (`Config`, `load_config`). Defaults are sensible so a partial config still produces a working scorer.
+- `events.py`: `RiskFactor`, `RiskEvent`, `FactorCategory`. Severity is clamped to [0,1]; unknown categories fall back to `OTHER`. `RiskEvent.aggregate_severity()` deliberately uses max-factor not sum, on the assumption that factors describe the same incident from different sensing modalities.
+- `segments.py`: `RouteSegment`, `Route`, `segment_for_point` (nearest-segment spatial join, used by the memory node when an incoming event has no pre-assigned segment).
+- `store.py`: `RiskStore` (SQLite-backed, schema in two tables: `risk_event` and `risk_factor`). Query path is segment-keyed and applies optional exponential decay at read time, so writes stay cheap. `:memory:` is supported for tests.
+- `scoring.py`: `score_routes(candidates, store, weights, semantic_objective)`. Returns `RouteScoreResult` with per-route breakdown of geometry / semantic / risk costs and dominant segment + factor categories. Lower `total_cost` wins.
+- `explainer.py`: `explain_choice(result, candidates, store)` produces a deterministic template-rendered explanation with `evidence_event_ids` cited verbatim. No LLM in the MVP path.
+- `config.py`: YAML loader (`Config`, `load_config`). Defaults are sensible so a partial config still produces a working scorer.
 
 The core has zero ROS imports and zero hardware imports. It runs under bare `python3` with `pyyaml` as the only third-party dependency.
 
-### `riskgraph_memory` — ROS persistence node + adapters
+### `riskgraph_memory`: ROS persistence node + adapters
 
 `memory_node.py` is single-responsibility: it owns the durable log. It does not score, it does not explain. It exposes `QuerySegmentRisk.srv` as a debug/inspection hook.
 
@@ -84,25 +84,25 @@ Adapters are split per upstream source (`safety_adapter`, `helix_adapter`, `tact
 
 `conversions.py` is pure-Python and is unit-tested with `SimpleNamespace` mocks, so the message-translation logic does not require the full ROS env.
 
-### `riskgraph_planner` — scoring service
+### `riskgraph_planner`: scoring service
 
 Thin ROS wrapper around `riskgraph_core.scoring.score_routes` and `riskgraph_core.explainer.explain_choice`. Reads weights and store path from parameters. The same SQLite file referenced by the memory node is opened for reads, so scoring sees live data.
 
-### `riskgraph_explainer` — streaming explainer
+### `riskgraph_explainer`: streaming explainer
 
 Subscribes to `/riskgraph/route_scores` and publishes `/riskgraph/explanations`. This is for downstream consumers (UI overlays, voice synthesis) that prefer a topic over a service call. The planner already includes an explanation in the service response, so this node is **optional** for systems that only consume the service.
 
-### `riskgraph_demo` — synthetic data + offline orchestrator
+### `riskgraph_demo`: synthetic data + offline orchestrator
 
 Two entry points:
-- `riskgraph_synthetic_publisher` — replays a JSON scenario fixture as ROS RiskEvent messages onto `/riskgraph/risk_events`.
-- `offline_demo` — pure-Python end-to-end exerciser that runs the full risk model against a fixture without spinning ROS, used in unit tests as a regression and in CI as a smoke test.
+- `riskgraph_synthetic_publisher`: replays a JSON scenario fixture as ROS RiskEvent messages onto `/riskgraph/risk_events`.
+- `offline_demo`: pure-Python end-to-end exerciser that runs the full risk model against a fixture without spinning ROS, used in unit tests as a regression and in CI as a smoke test.
 
-### `riskgraph_bringup` — launch + configs
+### `riskgraph_bringup`: launch + configs
 
 Two launch files:
-- `demo_offline.launch.py` — memory + planner + explainer + synthetic publisher, no upstream dependencies.
-- `integration.launch.py` — same core nodes, plus optional adapters gated by `enable_*_adapter` launch args.
+- `demo_offline.launch.py`: memory + planner + explainer + synthetic publisher, no upstream dependencies.
+- `integration.launch.py`: same core nodes, plus optional adapters gated by `enable_*_adapter` launch args.
 
 `config/default.yaml` holds parameters in the standard ROS 2 `<node_name>: ros__parameters: ...` format.
 
@@ -139,10 +139,10 @@ With `w_risk=4.0` the planner is willing to take a substantially longer route to
 
 `explain_choice` walks four cases in order:
 
-1. **Avoid risky alternative** — an unchosen route had material risk on a segment the chosen route avoids; cite the dominant factor category and up to 3 backing event ids.
-2. **Semantic match** — semantic objective matched by chosen route only.
-3. **Geometry only** — no risk anywhere; chosen is shorter.
-4. **Fallback** — generic combined-cost message.
+1. **Avoid risky alternative**: an unchosen route had material risk on a segment the chosen route avoids; cite the dominant factor category and up to 3 backing event ids.
+2. **Semantic match**: semantic objective matched by chosen route only.
+3. **Geometry only**: no risk anywhere; chosen is shorter.
+4. **Fallback**: generic combined-cost message.
 
 Templates are deterministic. There is no online LLM call. Future work can plug an LLM in front of this output to rephrase, but the **evidence_event_ids** field is the audit hook: any rephrasing must still carry those ids forward, so a reviewer can verify the claim against the persistent log.
 

@@ -10,13 +10,13 @@ This document describes how to wire RiskGraph-Go2 into a live Unitree Go2 + Jets
 | `helix/helix_msgs`                | `/helix/faults`           | `helix_msgs/FaultEvent`               | `riskgraph_helix_adapter`    |
 | `neuroskin/neuroskin_msgs` *(or upstream slip_state node)* | `/tactile/slip_state`     | `std_msgs/Bool`                       | `riskgraph_tactile_adapter`  |
 
-Adapters are **soft-dependent**: each does a `try: import upstream_msgs; except ImportError: …` at top-level and exits cleanly if the upstream package is not installed. This means `colcon build` and `ros2 launch riskgraph_bringup integration.launch.py` succeed even when individual upstream stacks are missing — the affected adapter just becomes a no-op.
+Adapters are **soft-dependent**: each does a `try: import upstream_msgs; except ImportError: …` at top-level and exits cleanly if the upstream package is not installed. This means `colcon build` and `ros2 launch riskgraph_bringup integration.launch.py` succeed even when individual upstream stacks are missing, the affected adapter just becomes a no-op.
 
 ## Frame conventions
 
 RiskGraph-Go2 expects:
-- `map` — global frame; the frame `RiskEvent.header.frame_id` is in by default.
-- `odom`, `base_link`, `camera_color_optical_frame` — used by upstream perception; not directly required by RiskGraph but assumed available for adapters that need to transform poses (none currently do).
+- `map`: global frame; the frame `RiskEvent.header.frame_id` is in by default.
+- `odom`, `base_link`, `camera_color_optical_frame`: used by upstream perception; not directly required by RiskGraph but assumed available for adapters that need to transform poses (none currently do).
 
 If upstream nodes publish events with `frame_id != "map"`, the adapters do **not** currently TF-transform them; the planner spatial-join will be wrong. This is a known limitation; see "Known limitations" below.
 
@@ -70,7 +70,7 @@ Both nodes must point at the same file; the planner reads, the memory node write
 The MVP planner does **not** generate routes; it scores candidates. To wire it into Nav2:
 
 1. Run Nav2's planner to produce a path (`/plan` topic, `nav_msgs/Path`).
-2. Discretise the path into segments — one per straight-line leg, with stable ids.
+2. Discretise the path into segments, one per straight-line leg, with stable ids.
 3. Build a `riskgraph_msgs/Route` message and call `/riskgraph/score_routes` with one or more candidate routes.
 
 A small "nav2 bridge" node is the natural next deliverable; it is not in scope for the MVP. For the demo, candidate routes come from the synthetic publisher / test harness.

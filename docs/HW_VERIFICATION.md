@@ -1,4 +1,4 @@
-# RiskGraph-Go2 v0.1.0 — Hardware Verification Checklist
+# RiskGraph-Go2 v0.1.0: Hardware Verification Checklist
 
 Single source of truth for the CaresLab session that flips v0.1.0 from
 `hw-unverified` to `hw-verified`. Cross-references:
@@ -45,7 +45,7 @@ is explicitly OUT of scope for this session.
   motion; the dog can stand on a stand.
 - The repos sourced into one workspace: this repo + `GO2-seeing-eye-dog`
   (for `go2_msgs`) + `helix` (for `helix_msgs`). Either or both upstream
-  packages can be absent — the affected adapter just no-ops, which is
+  packages can be absent, the affected adapter just no-ops, which is
   itself part of what we want to confirm.
 
 ---
@@ -140,7 +140,7 @@ ros2 launch riskgraph_bringup integration.launch.py \
 ```
 
 Watch for: each node prints `ready, store_path=...`. The two missing-msgs
-adapters (if any) print their no-op stderr line and exit cleanly — that's
+adapters (if any) print their no-op stderr line and exit cleanly, that's
 the expected behavior and is not a failure.
 
 **Terminal B (Jetson):** sanity-check the topic graph.
@@ -191,7 +191,7 @@ This script:
   yet seed segments. See `tests/hw/scenario_glossy_loop.py` GLOSSY/SAFE
   constants. **In v0.1.0 the segments are pre-tagged via `RiskEvent.segment_id`
   in the synthetic events**, NOT through TF. Confirm the harness is using
-  the explicit `segment_id` route — TODO for Yusuf below.
+  the explicit `segment_id` route, TODO for Yusuf below.
 - `pass=false; evidence empty` → planner answered, but the explainer found
   no events for `hw_glossy`. Check `sqlite3 $STORE "SELECT * FROM risk_event;"`
   on the Jetson.
@@ -238,7 +238,7 @@ them:
   through the safety_adapter will be stored with position 0, so the memory
   node's spatial join will tie-break to whichever segment is nearest to
   the origin. *This is why phase 1 uses synthetic events with explicit
-  positions — to pin the join.*
+  positions, to pin the join.*
 - **No TF transform in adapters.** If you `ros2 topic pub` an alert with
   `frame_id=base_link`, the planner will treat it as `map`. Note in the
   bag.

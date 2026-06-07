@@ -51,10 +51,10 @@ ros2 launch riskgraph_bringup demo_offline.launch.py
 ```
 
 This brings up:
-- `riskgraph_memory_node` — subscribes `/riskgraph/risk_events`, writes to SQLite (default `:memory:`).
-- `riskgraph_planner_node` — exposes `/riskgraph/score_routes` service.
-- `riskgraph_explainer_node` — re-broadcasts explanations on `/riskgraph/explanations`.
-- `riskgraph_synthetic_publisher` — replays the scenario fixture as `RiskEvent` messages.
+- `riskgraph_memory_node`: subscribes `/riskgraph/risk_events`, writes to SQLite (default `:memory:`).
+- `riskgraph_planner_node`: exposes `/riskgraph/score_routes` service.
+- `riskgraph_explainer_node`: re-broadcasts explanations on `/riskgraph/explanations`.
+- `riskgraph_synthetic_publisher`: replays the scenario fixture as `RiskEvent` messages.
 
 The synthetic publisher exits after replaying all events. The other three nodes keep running; you can call the planner service from another terminal:
 

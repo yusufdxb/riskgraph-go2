@@ -2,7 +2,7 @@
 
 Running record of audit checkpoints, findings, and how each was resolved. Three checkpoints are scheduled; each fills in one section.
 
-## Checkpoint 1 — Architecture & Interfaces
+## Checkpoint 1: Architecture & Interfaces
 
 **Trigger:** post-`riskgraph_msgs` + `riskgraph_core` + architecture doc.
 **Audit prompt:** `docs/audits/codex_architecture_audit_prompt.md`
@@ -15,7 +15,7 @@ Running record of audit checkpoints, findings, and how each was resolved. Three 
 | A-1 | MED      | `riskgraph_msgs/msg/RouteSegment.msg`              | `length_m` field is present but the core computes length from start/end and treats start/end as source of truth, so the field is decorative.            | DOCUMENTED in `docs/architecture.md` and `docs/hardware_integration.md`. Kept on the wire for protocol legibility; not used by the planner. |
 | A-2 | MED      | `riskgraph_memory/adapters/safety_adapter.py`      | Adapters set `RiskEvent.position` to `(0,0,0)` because they have no pose source. Memory node's spatial join then has nothing to chew on.                 | DOCUMENTED as the highest-priority hardware-readiness gap in `docs/hardware_integration.md`. Memory node falls back to registered segments + segment_id-from-stamp where possible. v0.2 will add TF-aware adapters. |
 | A-3 | LOW      | `docs/prior_art.md`                                | Initial novelty paragraph claimed "first" cross-run risk memory on Go2; refined to "to our knowledge, not demonstrated end-to-end" to avoid overclaim.   | RESOLVED in commit prior to v0.1.0 freeze. |
-| A-4 | LOW      | `riskgraph_core/scoring.py`                        | Semantic match is substring on label only — does not match the upstream `SemanticDetection.embedding` vector path.                                       | DOCUMENTED in `docs/architecture.md` "Scoring model" as MVP scope. v0.2 plug-in slot identified. |
+| A-4 | LOW      | `riskgraph_core/scoring.py`                        | Semantic match is substring on label only, does not match the upstream `SemanticDetection.embedding` vector path.                                       | DOCUMENTED in `docs/architecture.md` "Scoring model" as MVP scope. v0.2 plug-in slot identified. |
 | A-5 | MED      | `riskgraph_core/store.py:RiskStore.record_event`   | `DELETE` + `INSERT` in `risk_factor` is not wrapped in an explicit transaction. A concurrent reader could observe an event with no factors.               | MITIGATED by `events_for_segment` skipping events with empty factor lists. Real fix (BEGIN/COMMIT) tracked in v0.2. |
 
 ### Codex findings (HEAD `4046b04`)
@@ -38,9 +38,9 @@ Running record of audit checkpoints, findings, and how each was resolved. Three 
 
 1. Make adapters TF-aware so `RiskEvent.position` is populated *and/or* segment_id-pre-tagged from a paired pose subscription. Without it, real upstream events still don't map to a segment.
 2. Replace substring semantic match with embedding-based match once upstream `SemanticDetection.embedding` is consumed.
-3. Decide whether `evidence_for_segment` should default to scoring's decay or stay raw — consistency.
+3. Decide whether `evidence_for_segment` should default to scoring's decay or stay raw, consistency.
 
-## Checkpoint 2 — Midpoint (post-core, post-planner)
+## Checkpoint 2: Midpoint (post-core, post-planner)
 
 **Trigger:** post-ROS-side end-to-end smoke test passing on workstation.
 **Audit prompt:** `docs/audits/codex_midpoint_audit_prompt.md`
@@ -58,9 +58,9 @@ Running record of audit checkpoints, findings, and how each was resolved. Three 
 ### Highest-leverage fixes
 
 1. (Done) Audit adapter import paths so soft-dep claim is genuinely honored at every entry point.
-2. Decide whether `evidence_for_segment` should default to scoring's decay or stay raw — pick one and document.
+2. Decide whether `evidence_for_segment` should default to scoring's decay or stay raw, pick one and document.
 
-## Checkpoint 3 — Final (pre-handoff)
+## Checkpoint 3: Final (pre-handoff)
 
 **Trigger:** v0.1.0 tag candidate.
 **Audit prompt:** `docs/audits/codex_final_audit_prompt.md`
@@ -72,7 +72,7 @@ Running record of audit checkpoints, findings, and how each was resolved. Three 
 |-----|----------|-----------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------|------------|
 | F-1 | LOW      | `README.md`                 | "Validation status" makes the verified/inferred/hardware split explicit. No claim of "running on Go2" anywhere. README cross-references `docs/validation.md`. | OK. |
 | F-2 | LOW      | `.gitignore`                | `*.sqlite`, `demo_results.json`, `demo_results.csv` are all ignored, so accidental check-in of run artefacts is prevented.                                 | OK. |
-| F-3 | MED      | `docs/architecture.md`      | Diagram shows `/riskgraph/route_scores` flowing into the explainer, but the planner currently returns scores via service response only — the topic publication is the explainer's responsibility (it streams from inputs it receives). | DOCUMENTED clearly: planner publishes via service response; explainer node is OPTIONAL streaming convenience. README reflects this. |
+| F-3 | MED      | `docs/architecture.md`      | Diagram shows `/riskgraph/route_scores` flowing into the explainer, but the planner currently returns scores via service response only, the topic publication is the explainer's responsibility (it streams from inputs it receives). | DOCUMENTED clearly: planner publishes via service response; explainer node is OPTIONAL streaming convenience. README reflects this. |
 | F-4 | LOW      | `docs/validation.md`        | "33 tests pass" is sourced directly from a recorded `pytest` run. Any future test count change should re-run the source command before updating the doc.   | OK with note. |
 
 ### Verdict
@@ -85,4 +85,4 @@ Running record of audit checkpoints, findings, and how each was resolved. Three 
 2. Explicit SQLite transaction in `record_event` (gap A-5).
 3. Embedding-based semantic match (gap A-4).
 4. Decay-consistency between scoring and evidence selection (M-1).
-5. Nav2 bridge node — convert `/plan` into candidate `Route` messages.
+5. Nav2 bridge node, convert `/plan` into candidate `Route` messages.

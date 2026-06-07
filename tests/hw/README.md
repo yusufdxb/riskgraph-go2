@@ -1,4 +1,4 @@
-# tests/hw — Hardware verification harness for RiskGraph-Go2 v0.1.0
+# tests/hw: Hardware verification harness for RiskGraph-Go2 v0.1.0
 
 These are NOT unit tests. They run only on a Go2 + Jetson Orin NX session at
 CaresLab, against a live ROS 2 Humble graph that includes the upstream Go2
@@ -20,16 +20,16 @@ emit machine-readable PASS/FAIL verdicts that can be archived alongside
 
 ## What's here
 
-- `scenario_glossy_loop.py` — scripted-path driver. Brings up the integration
+- `scenario_glossy_loop.py`: scripted-path driver. Brings up the integration
   launch, registers known segments, drives a short scripted `/cmd_vel` loop
   past a "glossy" zone twice, hand-publishes synthetic safety alerts that
   simulate slip events at known map coordinates, then calls `/riskgraph/score_routes`
   with two candidate routes (the loop arm vs. an alternate arm) and asserts
   the planner picks the safer arm. The same SQLite file is then re-read after
   a node restart to assert cross-run memory.
-- `lib/__init__.py`, `lib/scenario_runner.py` — shared helpers (rosbag record,
+- `lib/__init__.py`, `lib/scenario_runner.py`: shared helpers (rosbag record,
   service call wrappers, segment registration, verdict printer).
-- `run_scenario.sh` — entry point. Sources ROS, sources the workspace, and
+- `run_scenario.sh`: entry point. Sources ROS, sources the workspace, and
   invokes the scenario script with a timestamped output directory.
 
 ## Running
@@ -46,11 +46,11 @@ source install/setup.bash                                    # this repo
 ```
 
 Output is written to `tests/hw/runs/<timestamp>/` and includes:
-- `bag/` — rosbag of the run (all `/riskgraph/*`, `/go2/safety_alert`,
+- `bag/`: rosbag of the run (all `/riskgraph/*`, `/go2/safety_alert`,
   `/cmd_vel`, `/tf`).
-- `verdict.json` — machine-readable PASS/FAIL with chosen_route_id, scores,
+- `verdict.json`: machine-readable PASS/FAIL with chosen_route_id, scores,
   and evidence event ids.
-- `console.log` — full stdout/stderr.
+- `console.log`: full stdout/stderr.
 
 ## Honesty boundary
 
