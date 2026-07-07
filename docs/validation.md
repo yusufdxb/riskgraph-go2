@@ -32,7 +32,7 @@ These claims have been demonstrated on the workstation with concrete commands. R
 
 - 2 unit tests pass: bundled `glossy_hallway` scenario chooses the LONG route, explanation contains "slip", at least one event id is cited.
 
-**Aggregate:** 71 tests, all green, both via `./scripts/run_tests.sh` and via `colcon test --packages-select riskgraph_core riskgraph_memory riskgraph_demo`. Five of those tests were added in response to the Codex architecture audit (degenerate / near-collinear segment joins, zero-candidate scoring, tie resolution, concurrent SQLite reader). See `docs/audits/audit_log.md`. The 33 tests added in v0.1.1 cover cross-run memory (mock-pose paths through SQLite restart cycles) and soft-import adapters (both upstream-present and upstream-missing modes), strengthening pre-hardware confidence ahead of the CaresLab session.
+**Aggregate:** 71 tests, all green, both via `./scripts/run_tests.sh` and via `colcon test --packages-select riskgraph_core riskgraph_memory riskgraph_demo`. Five of those tests were added in response to an architecture audit (degenerate / near-collinear segment joins, zero-candidate scoring, tie resolution, concurrent SQLite reader). The 33 tests added in v0.1.1 cover cross-run memory (mock-pose paths through SQLite restart cycles) and soft-import adapters (both upstream-present and upstream-missing modes), strengthening pre-hardware confidence ahead of the CaresLab session.
 
 ### Offline demo regression
 

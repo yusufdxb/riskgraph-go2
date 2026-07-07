@@ -42,6 +42,5 @@ milestones, not API contracts.
 
 ## [0.1.0] - 2026-04-28
 
-Initial MVP. See `docs/audits/audit_log.md` for the codex-driven HIGH/MED
-fixes applied at this tag, and `docs/HW_VERIFICATION.md` for the operator
-runbook against the glossy-loop hw scenario.
+Initial MVP. See `docs/HW_VERIFICATION.md` for the operator runbook against
+the glossy-loop hw scenario.

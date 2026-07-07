@@ -163,9 +163,8 @@ riskgraph-go2/
 │   ├── riskgraph_explainer/ # evidence-grounded explanation node
 │   ├── riskgraph_demo/      # synthetic publishers + orchestrator
 │   └── riskgraph_bringup/   # launch + configs
-├── docs/                    # architecture, prior art, demo, validation, audits
-├── scripts/                 # demo + test entry points
-└── AGENTS.md                # agent policy for this repo
+├── docs/                    # architecture, prior art, demo, validation
+└── scripts/                 # demo + test entry points
 ```
 
 ## License
