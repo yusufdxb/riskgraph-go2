@@ -39,7 +39,7 @@ explanation match: PASS
 overall:           PASS
 ```
 
-`demo_results.json` is written for inspection. `scripts/export_demo_results.py demo_results.json out.csv` renders a CSV summary suitable for paper tables.
+`demo_results.json` is written for inspection.
 
 ## Run the live ROS pipeline (requires ROS 2 Humble)
 
