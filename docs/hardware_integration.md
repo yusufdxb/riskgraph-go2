@@ -1,6 +1,6 @@
 # Hardware Integration
 
-This document describes how to wire RiskGraph-Go2 into a live Unitree Go2 + Jetson Orin NX 16 GB stack alongside the existing Go2 repos. **Nothing in this document has been verified on hardware as of this writing.** Steps are inferred from upstream code inspection and unit-test runs against synthetic publishers.
+How to wire RiskGraph-Go2 into a live Unitree Go2 + Jetson Orin NX 16 GB stack alongside the existing Go2 repos. **Nothing here has been verified on hardware.** Steps are inferred from upstream code inspection and unit-test runs against synthetic publishers.
 
 ## Topic / message contracts consumed
 
