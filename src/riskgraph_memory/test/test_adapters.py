@@ -17,6 +17,13 @@ adapter modules so the soft-import code path can be exercised in both modes:
 The tactile adapter has no soft upstream dep (it consumes std_msgs/Bool only),
 so its tests cover normal/edge/missing-field/leading-edge-debounce instead of
 import gating.
+
+All three adapters mix in `PoseTaggingMixin`, which imports `nav_msgs` and
+subscribes to the odometry topic, so the stub set includes a `nav_msgs`
+module and the fake node carries a settable clock. Pose behavior is asserted
+per adapter: a fresh odometry sample must land on the event, and a missing or
+stale one must produce an explicitly unposed event rather than a (0,0,0)
+position stamped "map".
 """
 from __future__ import annotations
 
@@ -54,10 +61,16 @@ class _FakeNode:
     """Stand-in for rclpy.node.Node. Captures publishers/subscribers and
     parameter values, exposes a get_logger() that swallows messages."""
 
+    #: Node clock reading, in seconds. Tests set this to control the event
+    #: timestamps the tactile adapter synthesizes and the receive time the
+    #: pose mixin falls back to for unstamped odometry.
+    now_s: float = 0.0
+
     def __init__(self, *_args, **_kwargs) -> None:
         self._params: dict = {}
         self._pubs: List[_FakePub] = []
         self._subs: List[_FakeSub] = []
+        self.now_s = type(self).now_s
 
     def declare_parameter(self, name: str, default):
         # Real rclpy returns a Parameter; we just stash the default.
@@ -112,9 +125,14 @@ class _FakeNode:
 
     def get_clock(self):
         # Tactile adapter calls self.get_clock().now().to_msg().
+        now_s = self.now_s
+
         class _Now:
             def to_msg(self):
-                return SimpleNamespace(sec=0, nanosec=0)
+                sec = int(now_s)
+                return SimpleNamespace(
+                    sec=sec, nanosec=int(round((now_s - sec) * 1e9))
+                )
 
         class _Clock:
             def now(self):
@@ -190,6 +208,42 @@ def _make_std_msgs_stub() -> ModuleType:
     msg.Bool = _Bool
     pkg.msg = msg
     return pkg
+
+
+def _make_nav_msgs_stub() -> ModuleType:
+    """nav_msgs/Odometry, shaped just deeply enough for the pose mixin.
+
+    The mixin reads `msg.header.stamp`, `msg.header.frame_id`, and
+    `msg.pose.pose.position.{x,y,z}`, so the stub reproduces that nesting
+    rather than flattening it: getting the nesting wrong in the stub would
+    hide a real attribute-path bug in the mixin.
+    """
+    pkg = types.ModuleType("nav_msgs")
+    msg = types.ModuleType("nav_msgs.msg")
+
+    class _Odometry:
+        def __init__(self):
+            self.header = SimpleNamespace(
+                stamp=SimpleNamespace(sec=0, nanosec=0), frame_id="")
+            self.child_frame_id = ""
+            self.pose = SimpleNamespace(
+                pose=SimpleNamespace(
+                    position=SimpleNamespace(x=0.0, y=0.0, z=0.0)))
+    msg.Odometry = _Odometry
+    pkg.msg = msg
+    return pkg
+
+
+def _odom_msg(x=1.0, y=2.0, z=0.0, frame="odom", sec=100, nsec=0):
+    """A ROS-shaped Odometry sample for feeding `_on_odom` directly."""
+    return SimpleNamespace(
+        header=SimpleNamespace(
+            stamp=SimpleNamespace(sec=sec, nanosec=nsec), frame_id=frame),
+        child_frame_id="base_link",
+        pose=SimpleNamespace(
+            pose=SimpleNamespace(
+                position=SimpleNamespace(x=x, y=y, z=z))),
+    )
 
 
 def _make_riskgraph_msgs_stub() -> ModuleType:
@@ -299,10 +353,12 @@ def _stubbed_imports(have_go2: bool = True, have_helix: bool = True):
             "rclpy", "rclpy.node", "rclpy.qos",
             "geometry_msgs", "geometry_msgs.msg",
             "std_msgs", "std_msgs.msg",
+            "nav_msgs", "nav_msgs.msg",
             "riskgraph_msgs", "riskgraph_msgs.msg", "riskgraph_msgs.srv",
             "go2_msgs", "go2_msgs.msg",
             "helix_msgs", "helix_msgs.msg",
             # Adapter modules — drop them so the next `import` re-runs module body.
+            "riskgraph_memory.adapters.pose_tagging",
             "riskgraph_memory.adapters.safety_adapter",
             "riskgraph_memory.adapters.helix_adapter",
             "riskgraph_memory.adapters.tactile_adapter",
@@ -311,6 +367,7 @@ def _stubbed_imports(have_go2: bool = True, have_helix: bool = True):
     rclpy = _make_rclpy_stub()
     geom = _make_geometry_msgs_stub()
     stdm = _make_std_msgs_stub()
+    navm = _make_nav_msgs_stub()
     rgm = _make_riskgraph_msgs_stub()
 
     sys.modules["rclpy"] = rclpy
@@ -320,6 +377,8 @@ def _stubbed_imports(have_go2: bool = True, have_helix: bool = True):
     sys.modules["geometry_msgs.msg"] = geom.msg
     sys.modules["std_msgs"] = stdm
     sys.modules["std_msgs.msg"] = stdm.msg
+    sys.modules["nav_msgs"] = navm
+    sys.modules["nav_msgs.msg"] = navm.msg
     sys.modules["riskgraph_msgs"] = rgm
     sys.modules["riskgraph_msgs.msg"] = rgm.msg
     sys.modules["riskgraph_msgs.srv"] = rgm.srv
@@ -354,6 +413,7 @@ def _stubbed_imports(have_go2: bool = True, have_helix: bool = True):
     # stale attribute and skips re-running the module body, leaving
     # HAVE_*_MSGS set from the previous test run.
     for name in (
+        "riskgraph_memory.adapters.pose_tagging",
         "riskgraph_memory.adapters.safety_adapter",
         "riskgraph_memory.adapters.helix_adapter",
         "riskgraph_memory.adapters.tactile_adapter",
@@ -376,6 +436,34 @@ def _stubbed_imports(have_go2: bool = True, have_helix: bool = True):
                 sys.modules.pop(k, None)
             else:
                 sys.modules[k] = v
+
+
+def _patch_node_params(overrides: dict) -> None:
+    """Swap the stubbed rclpy Node for one whose params can be overridden.
+
+    `_FakeNode.get_parameter` returns whatever default the node declared, which
+    models a launch with no overrides. Tests that need to exercise a
+    non-default configuration (an empty odom_topic, say) install this first,
+    inside an active `_stubbed_imports` block.
+    """
+    class _ParamNode(_FakeNode):
+        def get_parameter(self, name):
+            if name not in overrides:
+                return super().get_parameter(name)
+            val = overrides[name]
+
+            class _PV:
+                def __init__(self, v):
+                    self.string_value = str(v) if not isinstance(v, bool) else ""
+                    try:
+                        self.double_value = float(v)
+                    except (TypeError, ValueError):
+                        self.double_value = 0.0
+
+            return SimpleNamespace(get_parameter_value=lambda: _PV(val))
+
+    sys.modules["rclpy.node"].Node = _ParamNode
+    sys.modules["rclpy"].node.Node = _ParamNode
 
 
 # ---------- helpers for callback msg synthesis ----------
@@ -454,7 +542,8 @@ class TestSafetyAdapter:
             from riskgraph_memory.adapters import safety_adapter as sa
             node = sa.SafetyAdapter()
             assert len(node._pubs) == 1
-            assert len(node._subs) == 1
+            # Two subscriptions now: the alert topic and the pose source.
+            assert len(node._subs) == 2
             msg = _safety_alert_msg(
                 alert_type="DROP_DETECTED", description="cliff", distance=1.25,
             )
@@ -463,7 +552,8 @@ class TestSafetyAdapter:
             assert len(published) == 1
             ev = published[0]
             assert ev.confidence == 1.0
-            assert ev.header.frame_id == "map"
+            # No odometry was fed, so the event is explicitly unposed.
+            assert ev.header.frame_id == ""
             assert ev.header.stamp.sec == 10
             assert ev.header.stamp.nanosec == 500_000_000
             assert len(ev.factors) == 1
@@ -484,14 +574,80 @@ class TestSafetyAdapter:
             assert ev.factors[0].severity == pytest.approx(1.0)
             assert ev.factors[0].category == "SAFETY"
 
-    def test_callback_default_frame_is_map_when_upstream_blank(self):
+    def test_callback_is_unposed_without_odometry(self):
+        """The old contract stamped every alert (0,0,0) in "map". That is a
+        fabricated location, and the memory node joined it to whatever segment
+        sat near the origin. With no odometry the event must now say so."""
         with _stubbed_imports(have_go2=True):
             from riskgraph_memory.adapters import safety_adapter as sa
             node = sa.SafetyAdapter()
-            msg = _safety_alert_msg(frame="")
-            node._on_alert(msg)
+            node._on_alert(_safety_alert_msg(sec=100, nsec=0))
             ev = node._pubs[0].published[0]
-            assert ev.header.frame_id == "map"
+            assert ev.header.frame_id == ""
+            assert (ev.position.x, ev.position.y, ev.position.z) == (0.0, 0.0, 0.0)
+            assert node.unposed_event_count == 1
+            assert node.posed_event_count == 0
+
+    def test_callback_stamps_fresh_odometry(self):
+        with _stubbed_imports(have_go2=True):
+            from riskgraph_memory.adapters import safety_adapter as sa
+            node = sa.SafetyAdapter()
+            node._on_odom(_odom_msg(x=3.0, y=1.5, z=0.0, frame="odom", sec=100))
+            node._on_alert(_safety_alert_msg(sec=100, nsec=200_000_000))
+            ev = node._pubs[0].published[0]
+            assert ev.header.frame_id == "odom"
+            assert (ev.position.x, ev.position.y, ev.position.z) == (3.0, 1.5, 0.0)
+            assert node.posed_event_count == 1
+            assert node.unposed_event_count == 0
+
+    def test_callback_refuses_stale_odometry(self):
+        with _stubbed_imports(have_go2=True):
+            from riskgraph_memory.adapters import safety_adapter as sa
+            node = sa.SafetyAdapter()
+            # Default bound is 0.5 s; this sample is 5 s behind the alert.
+            node._on_odom(_odom_msg(x=3.0, y=1.5, frame="odom", sec=100))
+            node._on_alert(_safety_alert_msg(sec=105, nsec=0))
+            ev = node._pubs[0].published[0]
+            assert ev.header.frame_id == ""
+            assert (ev.position.x, ev.position.y) == (0.0, 0.0)
+            assert node.unposed_event_count == 1
+
+    def test_callback_ignores_upstream_alert_frame(self):
+        """A SafetyAlert's frame_id names the detecting sensor, not a place.
+        The event's frame must come from the pose source alone."""
+        with _stubbed_imports(have_go2=True):
+            from riskgraph_memory.adapters import safety_adapter as sa
+            node = sa.SafetyAdapter()
+            node._on_odom(_odom_msg(x=1.0, frame="odom", sec=100))
+            node._on_alert(_safety_alert_msg(frame="camera_depth_frame", sec=100))
+            ev = node._pubs[0].published[0]
+            assert ev.header.frame_id == "odom"
+
+    def test_odom_sample_with_unset_stamp_uses_receive_time(self):
+        """Some Go2 firmware publishes odometry with a zero header stamp;
+        falling back to the node clock keeps the age bound meaningful."""
+        with _stubbed_imports(have_go2=True):
+            from riskgraph_memory.adapters import safety_adapter as sa
+            sa.Node.now_s = 100.0
+            try:
+                node = sa.SafetyAdapter()
+                node._on_odom(_odom_msg(x=7.0, frame="odom", sec=0, nsec=0))
+                assert node.pose_cache.last_pose.stamp_s == pytest.approx(100.0)
+                node._on_alert(_safety_alert_msg(sec=100, nsec=100_000_000))
+                assert node._pubs[0].published[0].header.frame_id == "odom"
+            finally:
+                sa.Node.now_s = 0.0
+
+    def test_malformed_odometry_never_reaches_an_event(self):
+        with _stubbed_imports(have_go2=True):
+            from riskgraph_memory.adapters import safety_adapter as sa
+            node = sa.SafetyAdapter()
+            node._on_odom(_odom_msg(x=float("nan"), frame="odom", sec=100))
+            node._on_odom(_odom_msg(x=1.0, frame="", sec=100))
+            node._on_alert(_safety_alert_msg(sec=100))
+            ev = node._pubs[0].published[0]
+            assert ev.header.frame_id == ""
+            assert node.pose_cache.rejected_count == 2
 
     def test_callback_unknown_alert_type_uses_default_factor(self):
         with _stubbed_imports(have_go2=True):
@@ -589,6 +745,39 @@ class TestHelixAdapter:
             assert ev.header.stamp.sec == 7
             assert 0 <= ev.header.stamp.nanosec <= 999_999_999
 
+    def test_callback_is_unposed_without_odometry(self):
+        with _stubbed_imports(have_helix=True):
+            from riskgraph_memory.adapters import helix_adapter as ha
+            node = ha.HelixAdapter()
+            node._on_fault(_fault_event_msg(timestamp=100.0))
+            ev = node._pubs[0].published[0]
+            assert ev.header.frame_id == ""
+            assert (ev.position.x, ev.position.y, ev.position.z) == (0.0, 0.0, 0.0)
+            assert node.unposed_event_count == 1
+
+    def test_callback_stamps_fresh_odometry(self):
+        with _stubbed_imports(have_helix=True):
+            from riskgraph_memory.adapters import helix_adapter as ha
+            node = ha.HelixAdapter()
+            node._on_odom(_odom_msg(x=4.0, y=0.25, frame="odom", sec=100))
+            node._on_fault(_fault_event_msg(timestamp=100.2))
+            ev = node._pubs[0].published[0]
+            assert ev.header.frame_id == "odom"
+            assert (ev.position.x, ev.position.y) == (4.0, 0.25)
+            assert node.posed_event_count == 1
+
+    def test_callback_refuses_odometry_from_a_different_clock(self):
+        """A FaultEvent carries its own float timestamp. If it is nowhere near
+        the odometry clock the streams are not comparable, and stamping across
+        the gap would invent a location."""
+        with _stubbed_imports(have_helix=True):
+            from riskgraph_memory.adapters import helix_adapter as ha
+            node = ha.HelixAdapter()
+            node._on_odom(_odom_msg(x=4.0, frame="odom", sec=100))
+            node._on_fault(_fault_event_msg(timestamp=12.345))
+            assert node._pubs[0].published[0].header.frame_id == ""
+            assert node.unposed_event_count == 1
+
 
 # ---------- tactile adapter ----------------------------------------------------
 #
@@ -652,3 +841,95 @@ class TestTactileAdapter:
             node._on_slip(SimpleNamespace(data=0))
             node._on_slip(SimpleNamespace(data=1))
             assert len(node._pubs[0].published) == 2
+
+    def test_callback_is_unposed_without_odometry(self):
+        with _stubbed_imports():
+            from riskgraph_memory.adapters import tactile_adapter as ta
+            node = ta.TactileAdapter()
+            node.now_s = 100.0
+            node._on_slip(SimpleNamespace(data=True))
+            ev = node._pubs[0].published[0]
+            assert ev.header.frame_id == ""
+            assert (ev.position.x, ev.position.y, ev.position.z) == (0.0, 0.0, 0.0)
+            assert node.unposed_event_count == 1
+
+    def test_callback_stamps_fresh_odometry(self):
+        with _stubbed_imports():
+            from riskgraph_memory.adapters import tactile_adapter as ta
+            node = ta.TactileAdapter()
+            node.now_s = 100.1
+            node._on_odom(_odom_msg(x=2.5, y=-0.5, frame="odom", sec=100))
+            node._on_slip(SimpleNamespace(data=True))
+            ev = node._pubs[0].published[0]
+            assert ev.header.frame_id == "odom"
+            assert (ev.position.x, ev.position.y) == (2.5, -0.5)
+            assert node.posed_event_count == 1
+
+    def test_callback_refuses_stale_odometry(self):
+        with _stubbed_imports():
+            from riskgraph_memory.adapters import tactile_adapter as ta
+            node = ta.TactileAdapter()
+            node.now_s = 106.0
+            node._on_odom(_odom_msg(x=2.5, frame="odom", sec=100))
+            node._on_slip(SimpleNamespace(data=True))
+            assert node._pubs[0].published[0].header.frame_id == ""
+            assert node.unposed_event_count == 1
+
+
+# ---------- pose tagging configuration -----------------------------------------
+
+
+class TestPoseTaggingConfiguration:
+    """The mixin's own wiring, exercised through one representative adapter."""
+
+    def test_default_odom_topic_is_the_go2_contract(self):
+        with _stubbed_imports():
+            from riskgraph_memory.adapters import pose_tagging as pt
+            assert pt.DEFAULT_ODOM_TOPIC == "/utlidar/robot_odom"
+
+    def test_empty_odom_topic_creates_no_subscription(self):
+        """An explicitly empty topic declares "this deployment has no
+        odometry". Every event is then unposed, which is the honest outcome,
+        and nothing subscribes."""
+        with _stubbed_imports():
+            _patch_node_params({"odom_topic": ""})
+            from riskgraph_memory.adapters import tactile_adapter as ta
+            node = ta.TactileAdapter()
+            assert node._odom_sub is None
+            assert len(node._subs) == 1  # slip topic only
+            node.now_s = 100.0
+            node._on_slip(SimpleNamespace(data=True))
+            assert node._pubs[0].published[0].header.frame_id == ""
+
+    def test_custom_odom_topic_is_honored(self):
+        with _stubbed_imports():
+            _patch_node_params({"odom_topic": "/sim/odom"})
+            from riskgraph_memory.adapters import tactile_adapter as ta
+            node = ta.TactileAdapter()
+            assert node._odom_sub is not None
+            assert len(node._subs) == 2
+
+    def test_non_positive_max_age_falls_back_to_default(self):
+        with _stubbed_imports():
+            _patch_node_params({"pose_max_age_s": 0.0})
+            from riskgraph_memory.adapters import tactile_adapter as ta
+            from riskgraph_memory.pose_source import DEFAULT_MAX_AGE_S
+            node = ta.TactileAdapter()
+            assert node.pose_cache.max_age_s == DEFAULT_MAX_AGE_S
+
+    def test_custom_max_age_widens_the_window(self):
+        with _stubbed_imports():
+            _patch_node_params({"pose_max_age_s": 10.0})
+            from riskgraph_memory.adapters import tactile_adapter as ta
+            node = ta.TactileAdapter()
+            node.now_s = 105.0
+            node._on_odom(_odom_msg(x=2.5, frame="odom", sec=100))
+            node._on_slip(SimpleNamespace(data=True))
+            # 5 s old would be refused at the 0.5 s default, accepted at 10 s.
+            assert node._pubs[0].published[0].header.frame_id == "odom"
+
+    def test_stamp_seconds_converts_ros_time(self):
+        with _stubbed_imports():
+            from riskgraph_memory.adapters import pose_tagging as pt
+            stamp = SimpleNamespace(sec=12, nanosec=345_000_000)
+            assert pt.stamp_seconds(stamp) == pytest.approx(12.345)

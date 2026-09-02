@@ -4,6 +4,10 @@ Listens for slip flag transitions and emits a single RiskEvent per leading edge.
 This avoids flooding the memory store with one event per ROS publication while
 the slip flag is held high. Uses Bool rather than the full TactileStamped to
 stay decoupled from neuroskin_msgs availability.
+
+The slip flag carries no pose, so the leading edge is located from the shared
+odometry cache (see ``pose_tagging``). A slip seen with no fresh odometry is
+published unposed rather than stamped at the origin.
 """
 from __future__ import annotations
 
@@ -15,8 +19,10 @@ from geometry_msgs.msg import Point
 
 from riskgraph_msgs.msg import RiskEvent as RiskEventMsg, RiskFactor as RiskFactorMsg
 
+from .pose_tagging import PoseTaggingMixin, stamp_seconds
 
-class TactileAdapter(Node):
+
+class TactileAdapter(PoseTaggingMixin, Node):
     def __init__(self) -> None:
         super().__init__("riskgraph_tactile_adapter")
         self.declare_parameter("input_topic", "/tactile/slip_state")
@@ -30,6 +36,7 @@ class TactileAdapter(Node):
         self._pub = self.create_publisher(RiskEventMsg, out_topic, qos)
         self._sub = self.create_subscription(Bool, in_topic, self._on_slip, qos)
         self._prev = False
+        self.init_pose_tagging()
         self.get_logger().info(f"tactile_adapter: {in_topic} → {out_topic}")
 
     def _on_slip(self, msg: Bool) -> None:
@@ -38,9 +45,9 @@ class TactileAdapter(Node):
             out = RiskEventMsg()
             out.header = Header()
             out.header.stamp = now
-            out.header.frame_id = "map"
             out.event_id = ""
             out.position = Point()
+            self.stamp_pose(out, stamp_seconds(now))
             f = RiskFactorMsg()
             f.category = "SLIP"
             f.severity = self._severity

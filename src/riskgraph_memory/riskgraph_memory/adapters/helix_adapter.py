@@ -1,6 +1,10 @@
 """Adapter: helix_msgs/FaultEvent → riskgraph_msgs/RiskEvent.
 
 Soft dependency on helix_msgs.
+
+A FaultEvent names the node that failed, not the place it failed in. The
+place comes from the shared odometry cache (see ``pose_tagging``); a fault
+raised with no fresh odometry is published unposed.
 """
 from __future__ import annotations
 
@@ -14,6 +18,8 @@ from std_msgs.msg import Header
 
 from riskgraph_msgs.msg import RiskEvent as RiskEventMsg, RiskFactor as RiskFactorMsg
 
+from .pose_tagging import PoseTaggingMixin
+
 try:
     from helix_msgs.msg import FaultEvent  # noqa: F401
     HAVE_HELIX_MSGS = True
@@ -25,7 +31,7 @@ except ImportError:
 _SEVERITY_MAP = {1: 0.3, 2: 0.6, 3: 1.0}
 
 
-class HelixAdapter(Node):
+class HelixAdapter(PoseTaggingMixin, Node):
     def __init__(self) -> None:
         super().__init__("riskgraph_helix_adapter")
         self.declare_parameter("input_topic", "/helix/faults")
@@ -37,6 +43,7 @@ class HelixAdapter(Node):
         self._pub = self.create_publisher(RiskEventMsg, out_topic, qos)
         from helix_msgs.msg import FaultEvent as _FaultEvent
         self._sub = self.create_subscription(_FaultEvent, in_topic, self._on_fault, qos)
+        self.init_pose_tagging()
         self.get_logger().info(f"helix_adapter: {in_topic} → {out_topic}")
 
     def _on_fault(self, msg) -> None:
@@ -44,13 +51,14 @@ class HelixAdapter(Node):
         out = RiskEventMsg()
         out.header = Header()
         # helix FaultEvent carries timestamp as float64 — synthesize stamp
-        sec = int(msg.timestamp)
-        nsec = int((msg.timestamp - sec) * 1e9)
+        event_time_s = float(msg.timestamp)
+        sec = int(event_time_s)
+        nsec = int((event_time_s - sec) * 1e9)
         out.header.stamp.sec = sec
         out.header.stamp.nanosec = max(0, min(999_999_999, nsec))
-        out.header.frame_id = "map"
         out.event_id = ""
         out.position = Point()
+        self.stamp_pose(out, event_time_s)
         f = RiskFactorMsg()
         f.category = "FAULT"
         f.severity = float(sev)

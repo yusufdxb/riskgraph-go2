@@ -32,7 +32,7 @@ These claims have been demonstrated on the workstation with concrete commands. R
 
 - 2 unit tests pass: bundled `glossy_hallway` scenario chooses the LONG route, explanation contains "slip", at least one event id is cited.
 
-**Aggregate:** 71 tests, all green, both via `./scripts/run_tests.sh` and via `colcon test --packages-select riskgraph_core riskgraph_memory riskgraph_demo`. Five of those tests were added in response to an architecture audit (degenerate / near-collinear segment joins, zero-candidate scoring, tie resolution, concurrent SQLite reader). The 33 tests added in v0.1.1 cover cross-run memory (mock-pose paths through SQLite restart cycles) and soft-import adapters (both upstream-present and upstream-missing modes), strengthening pre-hardware confidence ahead of the CaresLab session.
+**Aggregate:** 157 tests, all green, both via `./scripts/run_tests.sh` and via `colcon test --packages-select riskgraph_core riskgraph_memory riskgraph_demo`. Five of those tests were added in response to an architecture audit (degenerate / near-collinear segment joins, zero-candidate scoring, tie resolution, concurrent SQLite reader). The 33 tests added in v0.1.1 cover cross-run memory (mock-pose paths through SQLite restart cycles) and soft-import adapters (both upstream-present and upstream-missing modes), strengthening pre-hardware confidence ahead of the CaresLab session. The 46 tests added in v0.1.2 cover the bounded-age odometry cache, per-adapter pose stamping (fresh, stale, absent, malformed), pose-tagging configuration, and the memory node's two spatial-join refusals.
 
 ### Offline demo regression
 
@@ -68,7 +68,7 @@ These claims are implied by the code but have not been exercised against live da
 
 These claims are explicitly **not** validated and require a CaresLab Go2 + Jetson Orin NX session.
 
-- End-to-end behaviour with the live Go2 stack: that adapters subscribe successfully to upstream topics with the right QoS, that frame_ids match, that pose-bearing events spatially-join to the right segments.
+- End-to-end behaviour with the live Go2 stack: that adapters subscribe successfully to upstream topics with the right QoS, that frame_ids match, that pose-bearing events spatially-join to the right segments. The pose path itself has been exercised on a real ROS 2 graph with a synthetic `/utlidar/robot_odom` publisher (see the v0.1.2 changelog entry); what remains unverified is the same path against the robot's own odometry.
 - Performance: latency from event-publish to memory-write, latency of `/riskgraph/score_routes` under realistic candidate counts, SQLite throughput on Jetson NVMe.
 - That the canonical weights (geometry=1.0, semantic=1.0, risk=4.0) produce useful behaviour for a low-vision user. This requires user-study data, not just synthetic regression.
 - Cross-run memory: that running the stack twice with the same SQLite file produces correct second-run scoring, where the first run's events bias the second.

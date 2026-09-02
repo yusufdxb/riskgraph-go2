@@ -4,9 +4,14 @@ Subscribes to /riskgraph/risk_events (riskgraph_msgs/RiskEvent) and writes
 every event into a SQLite-backed RiskStore. Exposes a service to query the
 cumulative risk for a list of segment ids, used by the planner.
 
-The node is intentionally minimal: it does not transform poses, run TF
-lookups, or do spatial joins itself — adapters and the planner handle that.
-This keeps the memory node a single-responsibility durable log.
+The node is intentionally minimal: it does not transform poses or run TF
+lookups. It does perform one spatial join, binding an unstamped event to the
+nearest seeded segment, and that join is guarded on two conditions: the event
+must carry a pose at all (a blank ``frame_id`` means the emitting adapter had
+no fresh odometry, see ``pose_source.UNKNOWN_FRAME``), and its frame must be
+the same frame the segment seed declares. Joining across frames, or joining a
+position the adapter never actually measured, produces a risk map that is
+confidently wrong, which is worse than one with holes in it.
 """
 from __future__ import annotations
 
@@ -29,6 +34,11 @@ from riskgraph_core.seed import (
 )
 
 from .conversions import core_event_from_msg
+from .pose_source import UNKNOWN_FRAME
+
+
+#: How often to repeat a join-refusal warning, in refused events.
+JOIN_WARN_EVERY = 50
 
 
 def _reliable_qos(depth: int = 50) -> QoSProfile:
@@ -51,6 +61,12 @@ class RiskMemoryNode(Node):
         self._store = RiskStore(store_path)
         self._known_segments = []  # populated by segment seed at startup
         self._segment_seed: SegmentSeedResult = SegmentSeedResult(segments=[])
+        # Join-boundary bookkeeping, surfaced as properties so an operator (or
+        # a test) can tell "nothing was risky" apart from "nothing could be
+        # located".
+        self._joined_events = 0
+        self._unposed_events = 0
+        self._frame_mismatch_events = 0
 
         seed_path = self.get_parameter("segment_seed_path").get_parameter_value().string_value
         if seed_path:
@@ -100,6 +116,21 @@ class RiskMemoryNode(Node):
         return list(self._known_segments)
 
     @property
+    def joined_event_count(self) -> int:
+        """Events bound to a segment by the spatial join."""
+        return self._joined_events
+
+    @property
+    def unposed_event_count(self) -> int:
+        """Events that arrived with no usable pose, so were never joined."""
+        return self._unposed_events
+
+    @property
+    def frame_mismatch_event_count(self) -> int:
+        """Events whose frame differed from the seed frame, so were never joined."""
+        return self._frame_mismatch_events
+
+    @property
     def segment_seed(self) -> SegmentSeedResult:
         """The parsed seed (or an empty SegmentSeedResult if seeding was skipped)."""
         return self._segment_seed
@@ -110,11 +141,32 @@ class RiskMemoryNode(Node):
         except Exception as exc:  # malformed input: log and drop
             self.get_logger().warn(f"dropped malformed RiskEvent: {exc}")
             return
-        # If the emitter did not stamp a segment, attempt a spatial join.
+        # If the emitter did not stamp a segment, attempt a spatial join —
+        # but only when the event's position is real and comparable.
         if not ev.segment_id and self._known_segments:
-            nearest = segment_for_point(self._known_segments, ev.position)
-            if nearest is not None:
-                ev.segment_id = nearest.segment_id
+            seed_frame = self._segment_seed.frame_id
+            if ev.frame_id == UNKNOWN_FRAME:
+                self._unposed_events += 1
+                self._warn_every(
+                    self._unposed_events,
+                    f"event {ev.event_id} carries no pose (blank frame_id); "
+                    f"storing unbound rather than joining it to a segment "
+                    f"({self._unposed_events} unposed so far)",
+                )
+            elif ev.frame_id != seed_frame:
+                self._frame_mismatch_events += 1
+                self._warn_every(
+                    self._frame_mismatch_events,
+                    f"event {ev.event_id} is in frame {ev.frame_id!r} but the "
+                    f"segment seed declares {seed_frame!r}; refusing the spatial "
+                    f"join ({self._frame_mismatch_events} mismatched so far). "
+                    f"Fix the seed's frame_id or the adapter's pose source.",
+                )
+            else:
+                nearest = segment_for_point(self._known_segments, ev.position)
+                if nearest is not None:
+                    ev.segment_id = nearest.segment_id
+                    self._joined_events += 1
         if not ev.segment_id:
             self.get_logger().debug(
                 f"event {ev.event_id} has no segment_id; storing unbound"
@@ -125,6 +177,16 @@ class RiskMemoryNode(Node):
             self.get_logger().error(
                 f"failed to persist RiskEvent {ev.event_id}: {exc}"
             )
+
+    def _warn_every(self, count: int, message: str,
+                    every: int = JOIN_WARN_EVERY) -> None:
+        """Log `message` on the first occurrence and every `every` after it.
+
+        A robot with no odometry at all would otherwise emit one WARN per
+        event for the length of the run.
+        """
+        if count % every == 1 or every == 1:
+            self.get_logger().warn(message)
 
     def _on_query(self, request: QuerySegmentRisk.Request,
                   response: QuerySegmentRisk.Response) -> QuerySegmentRisk.Response:

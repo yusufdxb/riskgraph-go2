@@ -1,18 +1,35 @@
 {
   "version": "1",
-  "frame_id": "map",
+  "frame_id": "odom",
   "segments": [
     {
       "segment_id": "hw_glossy",
-      "start": [0.0, 0.0, 0.0],
-      "end":   [4.0, 0.0, 0.0],
+      "start": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "end": [
+        4.0,
+        0.0,
+        0.0
+      ],
       "semantic_label": "hallway-glossy"
     },
     {
       "segment_id": "hw_safe",
-      "start": [0.0, 2.0, 0.0],
-      "end":   [4.0, 2.0, 0.0],
+      "start": [
+        0.0,
+        2.0,
+        0.0
+      ],
+      "end": [
+        4.0,
+        2.0,
+        0.0
+      ],
       "semantic_label": "hallway-safe"
     }
-  ]
+  ],
+  "_comment": "Coordinates are in the Go2 odometry frame, whose origin is the robot boot pose. The Go2 SDK publishes no map frame and no /tf, so \"odom\" is the only frame adapters can stamp."
 }

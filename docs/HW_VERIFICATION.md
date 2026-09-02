@@ -26,7 +26,8 @@ Pulled from `docs/validation.md` for cross-reference. Anything in the
 | Live `RiskEvent` flow → SQLite write                              | hardware-dependent  | yes (Step 5)              |
 | `/riskgraph/score_routes` answers correctly under live data       | hardware-dependent  | yes (Step 5)              |
 | Cross-run memory on Jetson NVMe across a process restart          | hardware-dependent  | yes (Step 6)              |
-| Frame_id / TF semantics for live events                           | hardware-dependent  | partial - documented gap (Step 7) |
+| Frame_id / TF semantics for live events                           | hardware-dependent  | partial - enforced, not transformed (Step 7) |
+| Adapters stamp live odometry onto events                          | hardware-dependent  | yes (Step 4, check posed/unposed split) |
 | `length_m` field decoration is harmless on the wire               | hardware-dependent  | yes (passive, in bag)     |
 
 Everything else (closed-loop motion, weight tuning, user-study evidence)
@@ -234,14 +235,22 @@ These are documented gaps in `docs/hardware_integration.md`. The session
 should record evidence of their current state without failing the run on
 them:
 
-- **Adapter pose is `(0, 0, 0)`.** Real `/go2/safety_alert` events arriving
-  through the safety_adapter will be stored with position 0, so the memory
-  node's spatial join will tie-break to whichever segment is nearest to
-  the origin. *This is why phase 1 uses synthetic events with explicit
-  positions, to pin the join.*
-- **No TF transform in adapters.** If you `ros2 topic pub` an alert with
-  `frame_id=base_link`, the planner will treat it as `map`. Note in the
-  bag.
+- **Pose coverage depends on the odometry stream.** Adapters stamp each
+  event from `/utlidar/robot_odom` (bounded by `pose_max_age_s`, default
+  0.5 s). Events that arrive while odometry is stale or absent are published
+  unposed (blank `frame_id`) and stored without a segment. Capture the
+  adapter's WARN lines and the posed/unposed split; a high unposed fraction
+  means the odometry stream needs attention before the risk map is
+  trustworthy. *Phase 1 still uses synthetic events with explicit positions,
+  so the join assertion does not depend on live odometry.*
+- **Frame agreement is enforced, not assumed.** The segment seed's
+  `frame_id` must equal the frame the odometry publishes (`odom` on a stock
+  Go2, which provides no `map` frame and no `/tf`). Events in any other
+  frame are refused by the spatial join and counted; if the memory node logs
+  a frame-mismatch WARN, the seed and the pose source disagree. The scripted
+  scenario publishes in `odom` by default; use `--frame` to change it.
+- **No TF transform in adapters.** An event's frame is whatever its pose
+  source publishes; adapters never transform. Note in the bag.
 - **No segment registration topic.** The integration launch does not yet
   publish a known segment list to `riskgraph_memory`. The pre-tag path
   (`RiskEvent.segment_id` set explicitly) is the only way segments get

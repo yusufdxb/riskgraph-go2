@@ -3,6 +3,11 @@
 Soft dependency on `go2_msgs`: if the upstream message is not present in the
 ament install tree, this node logs an error on import and exits cleanly so it
 does not block the rest of the bringup.
+
+A SafetyAlert says what was detected and how far away it was; it carries no
+robot pose. The pose comes from the shared odometry cache (see
+``pose_tagging``), and an alert that arrives with no fresh odometry is
+published unposed rather than stamped at the origin.
 """
 from __future__ import annotations
 
@@ -15,6 +20,8 @@ from geometry_msgs.msg import Point
 from std_msgs.msg import Header
 
 from riskgraph_msgs.msg import RiskEvent as RiskEventMsg, RiskFactor as RiskFactorMsg
+
+from .pose_tagging import PoseTaggingMixin, stamp_seconds
 
 try:
     from go2_msgs.msg import SafetyAlert  # noqa: F401
@@ -37,7 +44,7 @@ def _alert_to_factor(alert_type: str) -> tuple:
     return _ALERT_TABLE.get(alert_type, (0.5, "SAFETY"))
 
 
-class SafetyAdapter(Node):
+class SafetyAdapter(PoseTaggingMixin, Node):
     def __init__(self) -> None:
         super().__init__("riskgraph_safety_adapter")
         self.declare_parameter("input_topic", "/go2/safety_alert")
@@ -49,6 +56,7 @@ class SafetyAdapter(Node):
         self._pub = self.create_publisher(RiskEventMsg, out_topic, qos)
         from go2_msgs.msg import SafetyAlert as _SafetyAlert
         self._sub = self.create_subscription(_SafetyAlert, in_topic, self._on_alert, qos)
+        self.init_pose_tagging()
         self.get_logger().info(
             f"safety_adapter: {in_topic} → {out_topic}"
         )
@@ -58,9 +66,11 @@ class SafetyAdapter(Node):
         out = RiskEventMsg()
         out.header = Header()
         out.header.stamp = msg.header.stamp
-        out.header.frame_id = msg.header.frame_id or "map"
         out.event_id = ""  # memory node will not regen; use new_id pattern in conversions
-        out.position = Point()  # adapter does not know robot pose; planner/memory does spatial join
+        # The alert's own frame_id names the detecting sensor, not a position,
+        # so the event's frame is whatever the pose stamp establishes.
+        out.position = Point()
+        self.stamp_pose(out, stamp_seconds(msg.header.stamp))
         f = RiskFactorMsg()
         f.category = cat
         f.severity = float(sev)

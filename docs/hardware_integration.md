@@ -12,13 +12,27 @@ How to wire RiskGraph-Go2 into a live Unitree Go2 + Jetson Orin NX 16 GB stack a
 
 Adapters are **soft-dependent**: each does a `try: import upstream_msgs; except ImportError: …` at top-level and exits cleanly if the upstream package is not installed. This means `colcon build` and `ros2 launch riskgraph_bringup integration.launch.py` succeed even when individual upstream stacks are missing, the affected adapter just becomes a no-op.
 
+## Pose source
+
+Upstream events say what happened, not where. Each adapter subscribes to the robot's odometry, keeps the latest sample in a bounded-age cache, and stamps every outgoing `RiskEvent` with that position.
+
+| Parameter        | Default                | Meaning                                                              |
+|------------------|------------------------|----------------------------------------------------------------------|
+| `odom_topic`     | `/utlidar/robot_odom`  | `nav_msgs/Odometry` source. `""` declares "this deployment has no odometry". |
+| `pose_max_age_s` | `0.5`                  | How stale a sample may be, in either direction, relative to the event. |
+
+The topic contract was measured on the Go2 EDU on 2026-04-17: `/utlidar/robot_odom` at ~150 Hz, `header.frame_id = "odom"`, `child_frame_id = "base_link"`. The subscription is BEST_EFFORT / KEEP_LAST / depth 1, since only the newest sample matters.
+
+When no sample is available within `pose_max_age_s` of the event, the adapter does **not** invent a position and does **not** drop the event. It publishes the event with `header.frame_id` set to the empty string, the "unposed" marker, and the memory node stores it without a segment. An unbound event is honest; a confidently mislocated one is not.
+
 ## Frame conventions
 
 RiskGraph-Go2 expects:
-- `map`: global frame; the frame `RiskEvent.header.frame_id` is in by default.
-- `odom`, `base_link`, `camera_color_optical_frame`: used by upstream perception; not directly required by RiskGraph but assumed available for adapters that need to transform poses (none currently do).
+- `odom`: the frame adapters stamp events in, because it is the only frame the Go2 SDK provides. Its origin is the robot's boot pose. The SDK publishes no `map` frame and no `/tf`.
+- `base_link`, `camera_color_optical_frame`: used by upstream perception; not directly required by RiskGraph.
+- `""` (empty): the unposed marker described above. Never spatially joined.
 
-If upstream nodes publish events with `frame_id != "map"`, the adapters do **not** currently TF-transform them; the planner spatial-join will be wrong. This is a known limitation; see "Known limitations" below.
+**The segment seed's `frame_id` must equal the frame the adapters stamp** (`odom` for a stock Go2). The memory node refuses to spatially join an event whose frame differs from the seed's, and counts the refusals in `frame_mismatch_event_count`. Joining across frames silently produces a risk map that is confidently wrong, which is worse than one with holes in it. Adapters still do not TF-transform, so a deployment that genuinely has a `map` frame needs either a `map`-framed odometry source on `odom_topic` or a TF-aware adapter; see "Known limitations".
 
 ## Wiring into a live stack
 
@@ -77,8 +91,8 @@ A small "nav2 bridge" node is the natural next deliverable; it is not in scope f
 
 ## Known limitations (hardware-relevant)
 
-1. **No TF transforms in adapters.** Adapters forward upstream messages with the upstream frame_id intact. If `/go2/safety_alert.header.frame_id` is `base_link`, the planner spatial-join will produce wrong segment associations. Either (a) require upstream to publish in `map`, or (b) extend each adapter to wait for TF and transform. Test before relying on cross-frame events.
-2. **Adapter pose source is empty.** Adapters set `RiskEvent.position` to `(0,0,0)` because they do not subscribe to `/odom` or query TF. Upstream events do not all carry pose. The memory node's spatial-join will fall back to whatever segments are registered, but the join is unreliable until either the adapters are pose-aware or the upstream events carry their own poses. *This is the highest-priority hardware-readiness gap.*
+1. **No TF transforms in adapters.** An event's frame is whatever frame its pose source publishes in; adapters never transform. Running against a stack that has a `map` frame means pointing `odom_topic` at a `map`-framed odometry source, or extending the adapters to wait for TF. Cross-frame events are not silently joined, they are counted and refused, so a mismatch shows up as `frame_mismatch_event_count` and a launch-time WARN rather than as bad data.
+2. **Pose coverage is only as good as the odometry stream.** Events that arrive while odometry is stale or absent are stored unbound, and the planner cannot retrieve them by segment id. The adapter logs a WARN on the first such event and every 50th after it; `posed_event_count` / `unposed_event_count` give the exact split for a run. This is expected behavior, not a bug, but a run with a high unposed fraction means the odometry stream needs attention before the risk map is trustworthy.
 3. **No retry on SQLite contention.** The store opens with default SQLite settings. Under sustained concurrent writes from multiple adapters this should be fine (single writer, multiple readers via WAL), but it has not been load-tested.
 4. **No graceful shutdown of the SQLite handle.** If a node is killed via SIGKILL the WAL may need cleanup on next open; SQLite handles this automatically but it is worth confirming on Jetson.
 5. **`length_m` field on RouteSegment is decorative.** The core computes length from `start`/`end` so it is the source of truth; the message field is included for protocol legibility only.

@@ -69,12 +69,18 @@ from lib.scenario_runner import (  # noqa: E402
 # ---------------------------------------------------------------------------
 # Scenario geometry. Two parallel arms running 4m east. The "glossy" arm is
 # at y=0; the "safe" arm is at y=2 (or whatever lateral clearance the lab
-# has). All values are in the `map` frame.
+# has). All values are in the `odom` frame, whose origin is the robot's boot
+# pose: the Go2 SDK publishes no `map` frame and no /tf, so `odom` is the only
+# frame the adapters can stamp events in. The memory node refuses to join an
+# event whose frame differs from the seed's, so the frame here, the frame in
+# the seed file, and the frame the adapters publish must all agree. Override
+# with --frame if your deployment does provide a map.
 #
 # The slip events get published at (2, 0), the midpoint of the glossy arm,
 # so spatial join (in either the adapter-passthrough case or the memory-node
 # nearest-segment fallback) lands them on `glossy`.
 # ---------------------------------------------------------------------------
+DEFAULT_FRAME = "odom"
 GLOSSY = SegmentSpec("hw_glossy", x0=0.0, y0=0.0, x1=4.0, y1=0.0,
                     semantic_label="hallway-glossy")
 SAFE = SegmentSpec("hw_safe", x0=0.0, y0=2.0, x1=4.0, y1=2.0,
@@ -100,13 +106,15 @@ BAG_TOPICS = [
 ]
 
 
-def _publish_events(pub, events, period_s: float = 0.2) -> None:
+def _publish_events(pub, events, frame_id: str = DEFAULT_FRAME,
+                    period_s: float = 0.2) -> None:
     for spec in events:
-        pub.publish(build_event_msg(spec))
+        pub.publish(build_event_msg(spec, frame_id=frame_id))
         time.sleep(period_s)
 
 
-def _phase_one_live(node, score_client, scores_pub_topic: str) -> dict:
+def _phase_one_live(node, score_client, scores_pub_topic: str,
+                    frame_id: str = DEFAULT_FRAME) -> dict:
     """Publish synthetic slip events, then call score_routes.
 
     Returns a dict with the per-phase result fields for verdict.json.
@@ -120,12 +128,12 @@ def _phase_one_live(node, score_client, scores_pub_topic: str) -> dict:
     # Allow discovery to settle.
     time.sleep(1.0)
 
-    _publish_events(pub, EVENTS)
+    _publish_events(pub, EVENTS, frame_id=frame_id)
     # Let the memory node consume.
     time.sleep(0.8)
 
-    short = build_route_msg("short_glossy", [GLOSSY])
-    long_ = build_route_msg("long_safe", [SAFE])
+    short = build_route_msg("short_glossy", [GLOSSY], frame_id=frame_id)
+    long_ = build_route_msg("long_safe", [SAFE], frame_id=frame_id)
 
     resp, err = call_score_routes(score_client, [short, long_], semantic_objective="")
     if err:
@@ -153,7 +161,7 @@ def _phase_one_live(node, score_client, scores_pub_topic: str) -> dict:
     }
 
 
-def _phase_two_cross_run(score_client) -> dict:
+def _phase_two_cross_run(score_client, frame_id: str = DEFAULT_FRAME) -> dict:
     """After a node restart, score the same routes WITHOUT republishing events.
 
     The verdict here proves the SQLite file persisted across the kill/restart.
@@ -161,8 +169,8 @@ def _phase_two_cross_run(score_client) -> dict:
     whole launch) between phase 1 and phase 2; this script blocks waiting for
     the planner service to reappear.
     """
-    short = build_route_msg("short_glossy", [GLOSSY])
-    long_ = build_route_msg("long_safe", [SAFE])
+    short = build_route_msg("short_glossy", [GLOSSY], frame_id=frame_id)
+    long_ = build_route_msg("long_safe", [SAFE], frame_id=frame_id)
 
     resp, err = call_score_routes(score_client, [short, long_], semantic_objective="")
     if err:
@@ -187,6 +195,13 @@ def main(argv=None) -> int:
         default="both",
         help="`one` = live publish + score; `two` = score-only (post-restart cross-run); "
              "`both` = run phase one, prompt for restart, then phase two.",
+    )
+    parser.add_argument(
+        "--frame",
+        default=DEFAULT_FRAME,
+        help="frame the scripted events and routes are published in. Must match "
+             "the segment seed's frame_id, or the memory node refuses the "
+             f"spatial join (default: {DEFAULT_FRAME!r}, the Go2 odometry frame)",
     )
     parser.add_argument("--out-root", default=str(HERE), help="root dir for runs/<ts>/")
     parser.add_argument("--no-bag", action="store_true", help="skip rosbag record")
@@ -231,7 +246,8 @@ def main(argv=None) -> int:
     overall_pass = True
     try:
         if args.phase in ("one", "both"):
-            r1 = _phase_one_live(node, score_client, "/riskgraph/route_scores")
+            r1 = _phase_one_live(node, score_client, "/riskgraph/route_scores",
+                                 frame_id=args.frame)
             results.append(r1)
             print(f"[hw] phase1: pass={r1['pass']}  reason={r1.get('reason')}")
             if not r1["pass"]:
@@ -247,7 +263,7 @@ def main(argv=None) -> int:
                 time.sleep(10.0)
 
         if args.phase in ("two", "both"):
-            r2 = _phase_two_cross_run(score_client)
+            r2 = _phase_two_cross_run(score_client, frame_id=args.frame)
             results.append(r2)
             print(f"[hw] phase2: pass={r2['pass']}  reason={r2.get('reason')}")
             if not r2["pass"]:

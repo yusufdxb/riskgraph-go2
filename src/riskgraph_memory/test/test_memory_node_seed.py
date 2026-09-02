@@ -294,3 +294,128 @@ def test_nonexistent_seed_path_logs_but_does_not_crash(tmp_path):
             "segment_seed_path": str(tmp_path / "missing.json"),
         })
         assert node.known_segments == []
+
+
+# ---------------------------------------------------------------------------
+# Spatial-join boundary: the join is refused unless the event carries a real
+# pose in the same frame the seed declares.
+#
+# Before pose-aware adapters, every unposed event arrived as (0,0,0) stamped
+# "map" and was joined to whichever segment sat nearest the origin. These
+# tests pin the two refusals that replaced that behavior.
+# ---------------------------------------------------------------------------
+
+def _stored_rows(node):
+    """(event_id, frame_id, segment_id) for every persisted event.
+
+    Read straight off the store's connection: `RiskStore` exposes lookups by
+    segment, and the point of these tests is the events that have no segment.
+    """
+    return node.store._conn.execute(
+        "SELECT event_id, frame_id, segment_id FROM risk_event ORDER BY event_id"
+    ).fetchall()
+
+
+def _risk_event_msg(frame="map", x=5.0, y=0.1, z=0.0, event_id="ev_test"):
+    from riskgraph_msgs.msg import RiskEvent as RiskEventMsg, RiskFactor
+    msg = RiskEventMsg()
+    msg.event_id = event_id
+    msg.position = SimpleNamespace(x=x, y=y, z=z)
+    msg.confidence = 1.0
+    f = RiskFactor()
+    f.category = "SLIP"
+    f.severity = 0.9
+    f.source = "tactile/slip_state"
+    f.detail = "test"
+    msg.factors = [f]
+    msg.header = SimpleNamespace(
+        frame_id=frame, stamp=SimpleNamespace(sec=1, nanosec=0))
+    msg.segment_id = ""
+    return msg
+
+
+def _seeded_node(tmp_path, frame_id="map"):
+    p = tmp_path / "seed.json"
+    p.write_text(json.dumps({
+        "frame_id": frame_id,
+        "segments": [
+            {"segment_id": "A", "start": [0.0, 0.0, 0.0], "end": [10.0, 0.0, 0.0]},
+            {"segment_id": "B", "start": [0.0, 5.0, 0.0], "end": [10.0, 5.0, 0.0]},
+        ],
+    }))
+    return _build_node({
+        "store_path": ":memory:",
+        "decay_half_life_s": 0.0,
+        "segment_seed_path": str(p),
+    })
+
+
+def test_unposed_event_is_stored_unbound_not_joined(tmp_path):
+    with _memory_node_imports():
+        node = _seeded_node(tmp_path)
+        node._on_event(_risk_event_msg(frame="", x=0.0, y=0.0))
+        assert node.store.events_for_segment("A") == []
+        assert node.store.events_for_segment("B") == []
+        assert node.unposed_event_count == 1
+        assert node.joined_event_count == 0
+
+
+def test_unposed_event_is_still_persisted(tmp_path):
+    """Refusing the join must not lose the event: a slip that happened is
+    still evidence, it just has no place attached to it yet."""
+    with _memory_node_imports():
+        node = _seeded_node(tmp_path)
+        node._on_event(_risk_event_msg(frame="", event_id="ev_unposed"))
+        rows = _stored_rows(node)
+        assert len(rows) == 1
+        event_id, frame_id, segment_id = rows[0]
+        assert event_id == "ev_unposed"
+        assert frame_id == ""      # the unposed marker survives to the store
+        assert segment_id in (None, "")
+
+
+def test_frame_mismatch_refuses_the_join(tmp_path):
+    """Seed in "map", event in "odom": the coordinates are not comparable, so
+    joining them would place the event somewhere it never was."""
+    with _memory_node_imports():
+        node = _seeded_node(tmp_path, frame_id="map")
+        node._on_event(_risk_event_msg(frame="odom", x=5.0, y=0.1))
+        assert node.store.events_for_segment("A") == []
+        assert node.frame_mismatch_event_count == 1
+        assert node.joined_event_count == 0
+
+
+def test_matching_frame_joins(tmp_path):
+    with _memory_node_imports():
+        node = _seeded_node(tmp_path, frame_id="odom")
+        node._on_event(_risk_event_msg(frame="odom", x=5.0, y=0.1))
+        events_a = node.store.events_for_segment("A")
+        assert len(events_a) == 1
+        assert node.joined_event_count == 1
+        assert node.frame_mismatch_event_count == 0
+        assert node.unposed_event_count == 0
+
+
+def test_counters_separate_the_two_refusals(tmp_path):
+    with _memory_node_imports():
+        node = _seeded_node(tmp_path, frame_id="odom")
+        node._on_event(_risk_event_msg(frame="odom", event_id="e1"))
+        node._on_event(_risk_event_msg(frame="", event_id="e2"))
+        node._on_event(_risk_event_msg(frame="map", event_id="e3"))
+        assert node.joined_event_count == 1
+        assert node.unposed_event_count == 1
+        assert node.frame_mismatch_event_count == 1
+        assert len(_stored_rows(node)) == 3
+
+
+def test_emitter_stamped_segment_id_bypasses_the_frame_check(tmp_path):
+    """An emitter that already knows its segment is trusted: the frame guard
+    exists to protect the spatial join, and there is no join to protect."""
+    with _memory_node_imports():
+        node = _seeded_node(tmp_path, frame_id="map")
+        msg = _risk_event_msg(frame="odom", event_id="ev_prestamped")
+        msg.segment_id = "B"
+        node._on_event(msg)
+        assert [e.event_id for e in node.store.events_for_segment("B")] == [
+            "ev_prestamped"]
+        assert node.frame_mismatch_event_count == 0

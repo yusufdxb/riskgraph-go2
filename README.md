@@ -35,11 +35,12 @@ This repo has never been run on a real Go2. Everything below the "verified" line
 
 | Area | Status | Evidence |
 | --- | --- | --- |
-| Core risk model: events, segments, store, scoring, explanations | Verified offline | 111 pytest tests pass (`./scripts/run_tests.sh`), including the headline regression that a safer-longer route beats a shorter-risky one |
+| Core risk model: events, segments, store, scoring, explanations | Verified offline | 157 pytest tests pass (`./scripts/run_tests.sh`), including the headline regression that a safer-longer route beats a shorter-risky one |
 | Cross-run memory (persistence, warm start, decay on restart) | Verified offline | SQLite round-trip tests over restart cycles in `test_cross_run_memory.py` |
 | Offline end-to-end demo | Verified offline | `scripts/run_offline_demo.sh`, asserted choice and explanation, exits 0 |
 | Live ROS pipeline, workstation only | Verified on a workstation, no robot | `scripts/ros_end_to_end_check.py` publishes synthetic events, calls the scoring service, checks the cited event ids (see `docs/validation.md`) |
 | Adapters against real upstream messages | NOT verified | Unit-tested against injected message stubs only; live wire format and QoS untested |
+| Event pose stamping and the guarded spatial join | Verified on a workstation, no robot | Real ROS 2 graph with a synthetic `/utlidar/robot_odom` publisher: events land at the published position in `odom` and join the segment they are actually near; with no odometry they are stored unbound instead of at the origin |
 | Anything on Go2 plus Jetson hardware: latency, frame_id agreement, spatial joins, tuned weights | NOT verified | Requires a lab session; test plan in `docs/hardware_integration.md` |
 
 No claim of "running on Go2" is made anywhere in this repo. `docs/validation.md` is the single source of truth for what sits in which category.
@@ -145,6 +146,8 @@ Adapters subscribe to upstream topics and forward into RiskGraph. See `docs/hard
 ### Seed known route segments
 
 `riskgraph_memory` accepts a `segment_seed_path` ROS parameter. When set, it loads a JSON (or YAML) file describing the named route segments in the operating environment, so that incoming `RiskEvent`s without a stamped `segment_id` get spatially joined to the nearest seed segment before persistence. Without a seed, such events are stored unbound and the planner cannot retrieve them by id.
+
+The seed's `frame_id` must match the frame the adapters stamp events in, which is the frame of the odometry source (`odom` on a stock Go2). Events in any other frame are stored unbound rather than joined across frames.
 
 A sample seed for the glossy-loop scenario is installed at `share/riskgraph_bringup/config/segment_seeds/hw_glossy_loop.json`. To use it from the integration launch, point `default.yaml` at the file:
 

@@ -28,7 +28,11 @@ def core_event_from_msg(msg: Any) -> RiskEvent:
         factors=factors,
         confidence=float(msg.confidence),
         timestamp=float(msg.header.stamp.sec) + float(msg.header.stamp.nanosec) * 1e-9,
-        frame_id=str(msg.header.frame_id) or "map",
+        # A blank frame_id is meaningful, not missing: it is the adapters'
+        # "no fresh pose was available" marker (pose_source.UNKNOWN_FRAME).
+        # Coercing it to "map" here is exactly how unposed events used to be
+        # laundered into confidently-wrong spatial joins, so it is preserved.
+        frame_id=str(msg.header.frame_id),
         segment_id=(str(msg.segment_id) if getattr(msg, "segment_id", "") else None),
     )
 

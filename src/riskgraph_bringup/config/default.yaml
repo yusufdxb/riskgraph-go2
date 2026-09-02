@@ -17,6 +17,10 @@ riskgraph_memory:
     # seeding (events without an emitter-stamped segment_id get stored unbound).
     # See the "Seed known route segments" section of README.md and the sample
     # under src/riskgraph_bringup/config/segment_seeds/.
+    #
+    # The seed's `frame_id` must equal the frame the adapters stamp events in
+    # (the Go2's odometry frame, "odom"). Events in any other frame are stored
+    # unbound rather than joined across frames.
     segment_seed_path: ""
 
 riskgraph_planner:
@@ -37,14 +41,35 @@ riskgraph_safety_adapter:
   ros__parameters:
     input_topic: "/go2/safety_alert"
     output_topic: "/riskgraph/risk_events"
+    # Pose source. Adapters stamp each RiskEvent with the robot position from
+    # this topic; an event with no odometry newer than `pose_max_age_s` is
+    # published unposed (blank frame_id) and the memory node stores it without
+    # a segment instead of guessing one. Set odom_topic to "" to declare that
+    # this deployment has no odometry at all.
+    odom_topic: "/utlidar/robot_odom"   # nav_msgs/Odometry, ~150 Hz, frame "odom"
+    pose_max_age_s: 0.5
 
 riskgraph_helix_adapter:
   ros__parameters:
     input_topic: "/helix/faults"
     output_topic: "/riskgraph/risk_events"
+    # Pose source. Adapters stamp each RiskEvent with the robot position from
+    # this topic; an event with no odometry newer than `pose_max_age_s` is
+    # published unposed (blank frame_id) and the memory node stores it without
+    # a segment instead of guessing one. Set odom_topic to "" to declare that
+    # this deployment has no odometry at all.
+    odom_topic: "/utlidar/robot_odom"   # nav_msgs/Odometry, ~150 Hz, frame "odom"
+    pose_max_age_s: 0.5
 
 riskgraph_tactile_adapter:
   ros__parameters:
     input_topic: "/tactile/slip_state"
     output_topic: "/riskgraph/risk_events"
     severity: 0.7
+    # Pose source. Adapters stamp each RiskEvent with the robot position from
+    # this topic; an event with no odometry newer than `pose_max_age_s` is
+    # published unposed (blank frame_id) and the memory node stores it without
+    # a segment instead of guessing one. Set odom_topic to "" to declare that
+    # this deployment has no odometry at all.
+    odom_topic: "/utlidar/robot_odom"   # nav_msgs/Odometry, ~150 Hz, frame "odom"
+    pose_max_age_s: 0.5
