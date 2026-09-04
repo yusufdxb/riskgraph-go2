@@ -141,7 +141,7 @@ class RiskMemoryNode(Node):
         except Exception as exc:  # malformed input: log and drop
             self.get_logger().warn(f"dropped malformed RiskEvent: {exc}")
             return
-        # If the emitter did not stamp a segment, attempt a spatial join —
+        # If the emitter did not stamp a segment, attempt a spatial join,
         # but only when the event's position is real and comparable.
         if not ev.segment_id and self._known_segments:
             seed_frame = self._segment_seed.frame_id
