@@ -167,7 +167,7 @@ config declares only the robot-facing NIC, and the robot's own subnet is not rou
 the WiFi side. `unitree_go` / `unitree_api` are also typically absent on a workstation, so
 it could not deserialize the messages even with a route.
 
-`tests/hw/scenario_glossy_loop.py` therefore runs **on the payload**, not split-host.
+The whole live trial (`docs/HW_VERIFICATION.md`) therefore runs **on the payload**, not split-host.
 
 ### What the real odometry stream will test that synthetic publishers cannot
 

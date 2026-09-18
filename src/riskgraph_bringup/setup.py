@@ -6,7 +6,7 @@ package_name = 'riskgraph_bringup'
 
 setup(
     name=package_name,
-    version='0.1.2',
+    version='0.2.0',
     packages=[],
     py_modules=[],
     data_files=[

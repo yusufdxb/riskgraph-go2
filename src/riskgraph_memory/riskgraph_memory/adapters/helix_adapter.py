@@ -51,7 +51,7 @@ class HelixAdapter(PoseTaggingMixin, Node):
         sev = _SEVERITY_MAP.get(int(msg.severity), 0.5)
         out = RiskEventMsg()
         out.header = Header()
-        # helix FaultEvent carries timestamp as float64 (synthesize stamp
+        # helix FaultEvent carries timestamp as float64; synthesize the stamp
         event_time_s = float(msg.timestamp)
         sec = int(event_time_s)
         nsec = int((event_time_s - sec) * 1e9)

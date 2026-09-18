@@ -10,48 +10,26 @@ These three goals must be met without coupling the core logic to ROS, so the sam
 
 ## Overview
 
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│ upstream Go2 stack (separate repos, unmodified)                            │
-│                                                                            │
-│   /go2/safety_alert        /helix/faults        /tactile/slip_state        │
-│   (go2_msgs/SafetyAlert)   (helix_msgs/        (std_msgs/Bool)             │
-│                             FaultEvent)                                    │
-└──────────────┬───────────────────┬──────────────────────┬──────────────────┘
-               │                   │                      │
-               ▼                   ▼                      ▼
-       ┌────────────────────────────────────────────────────────┐
-       │ riskgraph_memory adapters (soft deps, opt-in via       │
-       │ launch args; no-op if upstream msg pkg is missing)     │
-       │                                                        │
-       │  safety_adapter.py | helix_adapter.py | tactile_adapter│
-       └──────────────────────────┬─────────────────────────────┘
-                                  │ riskgraph_msgs/RiskEvent
-                                  ▼
-       ┌────────────────────────────────────────────────────────┐
-       │ riskgraph_memory_node                                  │
-       │  - subscribes /riskgraph/risk_events                   │
-       │  - spatial-joins to known segments (when configured)   │
-       │  - writes-through to SQLite via riskgraph_core.store   │
-       │  - exposes /riskgraph/query_segment_risk service       │
-       └────────────────────┬───────────────────────────────────┘
-                            │ SQLite file (single shared db)
-                            ▼
-       ┌────────────────────────────────────────────────────────┐
-       │ riskgraph_planner_node                                 │
-       │  - service /riskgraph/score_routes (ScoreRoutes.srv)   │
-       │  - opens the same SQLite for reads                     │
-       │  - calls riskgraph_core.scoring.score_routes           │
-       │  - calls riskgraph_core.explainer.explain_choice       │
-       │  - returns RouteScoreArray + RouteExplanation          │
-       └────────────────────┬───────────────────────────────────┘
-                            │ /riskgraph/route_scores (publishable separately)
-                            ▼
-       ┌────────────────────────────────────────────────────────┐
-       │ riskgraph_explainer_node                               │
-       │  - subscribes /riskgraph/route_scores                  │
-       │  - publishes /riskgraph/explanations (streaming UI)    │
-       └────────────────────────────────────────────────────────┘
+Two paths. The **risk-memory path** is RiskGraph proper; the **motion path**
+belongs to Nav2 and the HELIX motion arbiter, and RiskGraph never publishes
+into it (see `docs/HW_VERIFICATION.md` section 1 for the full live topology).
+
+```mermaid
+flowchart TD
+  subgraph obs["observations"]
+    ADP["adapters (safety / helix / tactile)<br/>HARDWARE_DERIVED, odom frame"]
+    INJ["trial runner<br/>OPERATOR_INJECTED, map frame"]
+  end
+  ADP --> EV["/riskgraph/risk_events"]
+  INJ --> EV
+  EV --> MEM["riskgraph_memory<br/>TF into map, quarantine, dedup"]
+  MEM <--> DB[("SQLite v2<br/>bound to map_id + evidence class")]
+  MEM --> RC["/riskgraph/risk_costmap<br/>OccupancyGrid 0..90"]
+  MEM --> ST["/riskgraph/status"]
+  RC --> GC["Nav2 global costmap<br/>riskgraph_layer (StaticLayer)"]
+  GC --> PL["planner_server (NavFn)"]
+  DB --> SCORE["riskgraph_planner<br/>/riskgraph/score_routes (segment routes)"]
+  SCORE --> EXP["riskgraph_explainer<br/>/riskgraph/explanations"]
 ```
 
 ## Component responsibilities
@@ -98,22 +76,36 @@ Two entry points:
 - `riskgraph_synthetic_publisher`: replays a JSON scenario fixture as ROS RiskEvent messages onto `/riskgraph/risk_events`.
 - `offline_demo`: pure-Python end-to-end exerciser that runs the full risk model against a fixture without spinning ROS, used in unit tests as a regression and in CI as a smoke test.
 
+### `riskgraph_nav`: live integration
+
+Anchored-odometry localization (`riskgraph_localization`), the live preflight,
+the trial runner and its evidence report, the status CLI, replay parity, and a
+rehearsal robot for off-robot runs. Publishes no robot command.
+
 ### `riskgraph_bringup`: launch + configs
 
-Two launch files:
-- `demo_offline.launch.py`: memory + planner + explainer + synthetic publisher, no upstream dependencies.
-- `integration.launch.py`: same core nodes, plus optional adapters gated by `enable_*_adapter` launch args.
+- `riskgraph_live.launch.py`: memory + planner + explainer (+ optional adapters). Computes the map id and the single absolute database path from the experiment file.
+- `riskgraph_nav_live.launch.py`: localization + map_server + planner/controller servers + velocity_smoother + lifecycle manager (`config/nav2_live.yaml`).
+- `demo_offline.launch.py`: memory + planner + explainer + synthetic publisher, test-class database, no upstream dependencies.
 
 `config/default.yaml` holds parameters in the standard ROS 2 `<node_name>: ros__parameters: ...` format.
 
 ## Persistence model
 
-Two tables, both append-mostly:
+Schema v2 (`PRAGMA user_version = 2`; v1 files migrate in place on writable open):
 
 ```sql
-risk_event(event_id PK, timestamp, position_xyz, frame_id, segment_id, confidence)
+meta(key PK, value)            -- map_id, evidence_class, created_at, migrated_from
+risk_event(event_id PK, timestamp, position_xyz, frame_id, segment_id, confidence,
+           provenance, source_frame_id, map_id, run_mode, ingest_time, clock_note)
 risk_factor(event_id FK, category, severity, source, detail)
+quarantine(id PK, event_id, reason, detail, ingest_time, raw_json)
 ```
+
+Paths must be absolute. The first writer binds the file to a map id and an
+evidence class (`live`, `rehearsal`, `replay`, `test`); a mismatch on a later
+open raises instead of mixing data. Duplicate event ids are ignored (first
+write wins). Stored positions are in `map`.
 
 Decay is computed at *read* time by applying `exp(-ln(2)/half_life * (now - timestamp))` to each event's severity. This keeps the write path a single insert and means the same on-disk store works under any decay setting.
 
@@ -146,13 +138,24 @@ With `w_risk=4.0` the planner is willing to take a substantially longer route to
 
 Templates are deterministic. There is no online LLM call. Future work can plug an LLM in front of this output to rephrase, but the **evidence_event_ids** field is the audit hook: any rephrasing must still carry those ids forward, so a reviewer can verify the claim against the persistent log.
 
+## Spatial risk model (what Nav2 sees)
+
+`riskgraph_core.risk_field`: every stored map-frame event adds
+`w * (1 - (d/r)^2)` within radius `r` (0.8 m), `w = aggregate severity x decay`.
+Cells are `min(90, round(90 * risk))`. Compact support means an event cannot
+affect a route more than `r` away; the cap below 100 means risk is never an
+obstacle. Decay is off for the trial (the half life is a parameter).
+
 ## Hardware proof boundary
 
-This repo does not yet run on a Go2. All tests, the offline demo, and the live ROS end-to-end check (`scripts/ros_end_to_end_check.py`) run on a workstation with synthetic publishers. Hardware integration is documented in `docs/hardware_integration.md`; closing that boundary requires a CaresLab session and is tracked separately from this repo.
+Hardware experiment prepared, physical behavior unverified. Unit tests, ROS
+integration tests against real Nav2 processes and a full rehearsal of the
+live procedure run off-robot. The live procedure is `docs/HW_VERIFICATION.md`.
 
 ## What's intentionally absent
 
 - **Online LLM in the explanation path.** Determinism + auditable evidence first. LLM rephrasing is a v0.2 concern.
 - **Custom CUDA / Gaussian splatting / heavyweight perception.** Out of scope; we consume upstream perception as messages.
-- **Path planning from scratch.** RiskGraph-Go2 scores candidate routes; route generation is Nav2's job.
+- **Path planning from scratch or a custom Nav2 plugin.** Nav2's NavFn plans; RiskGraph only contributes a cost layer through a stock StaticLayer.
+- **Any motion command.** No `/cmd_vel`, no sport API. The HELIX arbiter + sport sink are the only motion authority.
 - **Mutable graph topology in the MVP.** Segments are static within a session. Cross-run topology learning is a v0.3 concern.

@@ -51,6 +51,7 @@ class GraphProbe:
             except Exception:
                 pass
         self._ex.shutdown(timeout_sec=1.0)
+        self._thread.join(timeout=2.0)
         self.node.destroy_node()
 
     # -- graph --------------------------------------------------------------

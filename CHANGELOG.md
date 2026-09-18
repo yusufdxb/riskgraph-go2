@@ -4,6 +4,67 @@ All notable changes to RiskGraph-Go2 are tracked here.
 This project does not yet follow strict semver: 0.x.y bumps are operational
 milestones, not API contracts.
 
+## [0.2.0] - 2026-09-18
+
+Hardware experiment prepared. Physical behavior on the GO2 is still
+UNVERIFIED: everything below was exercised off-robot (unit tests, real ROS 2
++ Nav2 processes, and a full rehearsal against a stand-in robot).
+
+### Added
+- **Nav2 integration.** `riskgraph_memory` publishes `/riskgraph/risk_costmap`
+  (nav_msgs/OccupancyGrid, same geometry as `/map`, values 0..90, never
+  lethal, transient local). Nav2's global costmap reads it through a second
+  StaticLayer (`config/nav2_live.yaml`), so remembered risk is a planning cost
+  inside Nav2 itself. Verified off-robot: one injected event moves the NavFn
+  plan from the left corridor to the right one.
+- `riskgraph_core.risk_field`: compact-support spatial risk over stored
+  map-frame events, rasterization, path exposure metrics.
+- `riskgraph_core.map_identity`: map id = hash of map image + metadata +
+  start-marker anchor. The database is bound to it.
+- `riskgraph_core.experiment`: the canonical two-corridor course (one file
+  drives the map, anchor, goal, tolerances and pass logic) and a map generator.
+- `riskgraph_nav` package:
+  - `riskgraph_localization`: `odom->base_link` TF restamped on the payload
+    clock, `map->odom` anchored on marker A, jump latch, status topic.
+  - `riskgraph_preflight` / `scripts/preflight_live.sh`: 38 read-only GO/NO-GO
+    checks (environment, data flow, TF, Nav2 lifecycle, single database,
+    motion-authority topology, HELIX stage D/E evidence).
+  - `riskgraph_live_trial` / `scripts/run_live_trial.sh`: Trials A-E with typed
+    arming, abort monitors, goal cancellation and an evidence bundle.
+  - `riskgraph_status`, `riskgraph_replay_check` / `scripts/replay_trial_bag.sh`,
+    `riskgraph_generate_course_map`, and `riskgraph_rehearsal_go2` +
+    `scripts/rehearse_live_trial.sh` for off-robot rehearsal.
+- `RiskEvent.msg`: `provenance`, `source_frame_id`, `map_id`.
+- ROS integration tests (`tests/integration`, real processes and Nav2) and a
+  CI job running them in `ros:humble`.
+
+### Changed
+- **SQLite store v2**: `PRAGMA user_version` with in-place v1 migration,
+  absolute paths only, map-id and evidence-class binding (a replay or
+  rehearsal database cannot be opened as live), first-write-wins duplicates
+  (was `INSERT OR REPLACE`), quarantine table, `synchronous=FULL`, read-only
+  mode for readers, online backup.
+- The memory node TF-transforms every event into `map` at its timestamp and
+  quarantines what it cannot place (unposed, no TF, non-finite, wrong map,
+  non-live provenance in live mode). Unposed events are no longer stored as
+  unbound risk rows.
+- One database path for all nodes, computed once by the launch file:
+  `~/.local/share/riskgraph/<map_id>/<db_tag>.sqlite`.
+- Adapters assign event ids and provenance.
+
+### Fixed
+- Adapters judged odometry freshness with the robot's header stamps, which
+  were measured months behind the payload clock: every live event would have
+  been stored unposed. Freshness now uses the receipt clock.
+- The memory node's TF listener shared its node with the main executor, so a
+  lookup with a timeout could wait on callbacks it was blocking.
+- Planner, explainer, adapters and the synthetic publisher exited non-zero on
+  SIGINT.
+
+### Removed
+- `integration.launch.py` (replaced by `riskgraph_live.launch.py`) and the
+  motors-off `tests/hw` harness (replaced by the live trial).
+
 ## [0.1.2] - 2026-09-02
 
 ### Added

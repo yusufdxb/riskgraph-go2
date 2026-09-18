@@ -808,7 +808,14 @@ def main(argv=None) -> int:
     a = ap.parse_args(argv)
     if a.mode == "live" and a.no_bag:
         raise SystemExit("--no-bag is refused in live mode: the bag is part of the evidence")
-    return Runner(a).run()
+    code = Runner(a).run()
+    # Every evidence file is written and closed at this point. rclpy's
+    # interpreter-exit teardown with background executor threads has been
+    # seen to segfault (exit 245 masking a PASS); skip it so the exit code is
+    # the trial's.
+    sys.stdout.flush()
+    sys.stderr.flush()
+    os._exit(code)
 
 
 if __name__ == "__main__":
