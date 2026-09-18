@@ -97,6 +97,8 @@ class Experiment:
     max_speed_mps: float
     stationary_speed_mps: float
     max_execution_s: float
+    max_anchor_drift_m: float
+    max_anchor_drift_yaw_rad: float
     raw: Dict = field(default_factory=dict, compare=False, repr=False)
 
     @property
@@ -187,6 +189,8 @@ def load_experiment(path: str) -> Experiment:
         max_speed_mps=float(acc.get("max_speed_mps", 0.35)),
         stationary_speed_mps=float(acc.get("stationary_speed_mps", 0.05)),
         max_execution_s=float(acc.get("max_execution_s", 120.0)),
+        max_anchor_drift_m=float(acc.get("max_anchor_drift_m", 0.5)),
+        max_anchor_drift_yaw_rad=float(acc.get("max_anchor_drift_yaw_rad", 0.35)),
         raw=raw,
     )
     problems = check_experiment(exp)

@@ -137,13 +137,16 @@ def test_paths_are_absolute_and_keyed_by_map_id(tmp_path):
 
 
 def _results(ok=True):
-    return {"status": "COMPLETED", "preflight_verdict": "GO", "operator_attested": True, "trials": {
-        "A_baseline": {"plan": {"side": "left"}, "execution": {"succeeded": True, "arbiter": {"nonzero_while_hold": 0}}},
+    return {"status": "COMPLETED", "preflight_verdict": "GO", "operator_attested": True,
+            "bag": {"ok": True, "message_count": 1000}, "trials": {
+        "A_baseline": {"plan": {"side": "left"}, "execution": {"succeeded": True, "arbiter": {"nonzero_while_hold": 0},
+                                                              "post": {"stationary_after": True}}},
         "B_inject": {"row_ok": True, "position_error_m": 0.0, "db_path": "/db", "incidents_before": 0,
                      "incidents_after": 1, "nav2_received": True},
         "C_risk_aware": {"plan": {"side": "right"}, "comparison": {"risk_reduced": True, "pass": True},
                          "execution": {"succeeded": True, "executed_side": "right" if ok else "left",
-                                       "arbiter": {"nonzero_while_hold": 0}},
+                                       "arbiter": {"nonzero_while_hold": 0},
+                                       "post": {"stationary_after": True}},
                          "executed_comparison": {"risk_reduced": True}},
         "D_restart": {"instance_before": "a", "instance_after": "b", "incidents_before": 1,
                       "incidents_after": 1, "db_path_after": "/db", "pass": True},
@@ -169,6 +172,22 @@ def test_report_fails_when_robot_did_not_take_the_planned_corridor(tmp_path):
     _bundle(tmp_path)
     crit = {c["id"]: c["pass"] for c in criteria(_results(ok=False), {"db_path": "/db"}, str(tmp_path))}
     assert crit["8"] is False
+
+
+def test_report_fails_when_robot_did_not_stop(tmp_path):
+    _bundle(tmp_path)
+    r = _results()
+    r["trials"]["A_baseline"]["execution"]["post"]["stationary_after"] = False
+    crit = {c["id"]: c["pass"] for c in criteria(r, {"db_path": "/db"}, str(tmp_path))}
+    assert crit["2"] is False
+
+
+def test_report_fails_when_bag_recorder_died(tmp_path):
+    _bundle(tmp_path)
+    r = _results()
+    r["bag"] = {"ok": False, "died_before_stop": True}
+    crit = {c["id"]: c["pass"] for c in criteria(r, {"db_path": "/db"}, str(tmp_path))}
+    assert crit["13"] is False
 
 
 def test_report_fails_without_bag(tmp_path):

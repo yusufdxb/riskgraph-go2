@@ -57,6 +57,7 @@ def _ev(eid, x=2.0, y=0.0, severity=0.9, category="SLIP", source="tactile/slip_s
     f.detail = "smoke test"
     msg.factors = [f]
     msg.confidence = 1.0
+    msg.provenance = "SYNTHETIC"
     return msg
 
 
@@ -85,27 +86,27 @@ def main() -> int:
     if p.exists():
         p.unlink()
 
-    rclpy.init()
+    # Configure both nodes through ROS parameters, exactly as a launch file
+    # would: one absolute test-class database, a segment seed for the join.
+    import json
+    import tempfile
+    tmp = Path(tempfile.mkdtemp(prefix="riskgraph_e2e_"))
+    seed = tmp / "seed.json"
+    seed.write_text(json.dumps({"frame_id": "map", "segments": [
+        {"segment_id": "glossy", "start": [0.0, 0.0, 0.0], "end": [4.0, 0.0, 0.0]},
+        {"segment_id": "safe-a", "start": [0.0, 5.0, 0.0], "end": [4.0, 5.0, 0.0]}]}))
+    params = tmp / "params.yaml"
+    params.write_text(
+        "riskgraph_memory:\n  ros__parameters:\n"
+        f"    store_path: {SHARED_DB}\n    run_mode: test\n    map_id: e2e-check\n"
+        f"    publish_grid: false\n    segment_seed_path: {seed}\n"
+        "riskgraph_planner:\n  ros__parameters:\n"
+        f"    store_path: {SHARED_DB}\n    expected_map_id: e2e-check\n    weight_risk: 4.0\n")
+    rclpy.init(args=["--ros-args", "--params-file", str(params)])
     executor = SingleThreadedExecutor()
 
-    # Bring up memory + planner nodes pointed at the same SQLite file.
-    import rclpy.parameter as rclparam
     memory = RiskMemoryNode()
-    memory.set_parameters([rclparam.Parameter("store_path", rclparam.Parameter.Type.STRING, SHARED_DB)])
-    # The store was opened with the default at __init__ — re-open against the shared file.
-    from riskgraph_core.store import RiskStore
-    memory._store.close()
-    memory._store = RiskStore(SHARED_DB)
-    # Pre-register a known segment so spatial join assigns events to "glossy".
-    from riskgraph_core.segments import RouteSegment
-    memory.register_segments([
-        RouteSegment(segment_id="glossy",  start=(0.0, 0.0, 0.0), end=(4.0, 0.0, 0.0)),
-        RouteSegment(segment_id="safe-a",  start=(0.0, 5.0, 0.0), end=(4.0, 5.0, 0.0)),
-    ])
-
     planner = PlannerNode()
-    planner._store.close()
-    planner._store = RiskStore(SHARED_DB)
 
     executor.add_node(memory)
     executor.add_node(planner)

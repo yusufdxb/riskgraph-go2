@@ -205,13 +205,26 @@ class Runner:
     def stop_bag(self) -> None:
         if self.bag_proc is None:
             return
-        os.killpg(os.getpgid(self.bag_proc.pid), signal.SIGINT)
+        died_early = self.bag_proc.poll() is not None
+        if not died_early:
+            os.killpg(os.getpgid(self.bag_proc.pid), signal.SIGINT)
         try:
-            self.bag_proc.wait(timeout=20.0)
+            rc = self.bag_proc.wait(timeout=20.0)
         except subprocess.TimeoutExpired:
             os.killpg(os.getpgid(self.bag_proc.pid), signal.SIGKILL)
+            rc = self.bag_proc.wait()
         self.bag_proc = None
-        self.log("bag closed")
+        count = None
+        meta = os.path.join(self.run_dir, "bag", "metadata.yaml")
+        try:
+            import yaml
+            count = int(yaml.safe_load(open(meta))["rosbag2_bagfile_information"]["message_count"])
+        except Exception:
+            pass
+        self.results["bag"] = {"exit_code": rc, "died_before_stop": died_early,
+                               "message_count": count,
+                               "ok": (not died_early) and count is not None and count > 0}
+        self.log(f"bag closed: exit {rc}, {count} messages, died early={died_early}")
 
     def snapshot_graph(self, tag: str) -> None:
         self.save(f"graph/{tag}_graph.json", self.ros.probe.snapshot())
@@ -243,28 +256,50 @@ class Runner:
         return self.ros.robot_pose()
 
     def ensure_at_start(self, label: str) -> dict:
+        """Robot physically on marker A, still, then RE-ANCHOR the map on it.
+
+        Odometry cannot detect its own drift, so before every trial the
+        operator places the robot on the physical marker and the map frame is
+        re-solved there. The odometry-derived pose just before re-anchoring is
+        the measured drift; it is recorded, and a drift larger than the
+        experiment's limit aborts (odometry is not trustworthy for the trial).
+        """
         exp = self.exp
-        for attempt in range(3):
-            p = self.robot_pose()
-            ok = p is not None and math.hypot(p["x"] - exp.start.x, p["y"] - exp.start.y) <= exp.start_xy_tol_m \
-                and abs(math.atan2(math.sin(p["yaw"] - exp.start.yaw), math.cos(p["yaw"] - exp.start.yaw))) \
-                <= exp.start_yaw_tol_rad
-            if ok and self.ros.stationary():
-                self.log(f"{label}: robot on marker {exp.start_marker}: ({p['x']:.2f}, {p['y']:.2f}, "
-                         f"yaw {p['yaw']:.2f}), stationary")
-                return p
-            if self.rehearsal:
-                self.ros.rehearsal_walk_to(exp.start.x, exp.start.y, exp.start.yaw)
-                self.ros.wait_until(self.ros.stationary, timeout=60.0, settle=2.0)
-                continue
+        if self.rehearsal:
+            self.ros.rehearsal_walk_to(exp.start.x, exp.start.y, exp.start.yaw)
+        else:
             self.banner(
-                f"{label}: place the robot on marker {exp.start_marker} "
-                f"({exp.start.x}, {exp.start.y}) facing marker {exp.goal_marker} (+x).\n"
-                f"Walk it there with the handheld remote, release the sticks, keep the remote in hand.\n"
-                f"Current map pose: {p}")
-            self.ask("Press Enter when the robot is standing still on the marker: ")
-        raise Abort(f"{label}: robot is not on marker {exp.start_marker} within tolerance "
-                    f"({exp.start_xy_tol_m} m, {exp.start_yaw_tol_rad} rad)")
+                f"{label}: place the robot PHYSICALLY on marker {exp.start_marker} facing marker "
+                f"{exp.goal_marker} (+x). Walk it with the handheld remote, then release the sticks.\n"
+                f"Do not steer to match the printed pose: the tape on the floor is the reference.\n"
+                f"Odometry currently says: {self.robot_pose()}")
+            self.ask(f"Press Enter when the robot stands still ON marker {exp.start_marker}: ")
+        if not self.ros.wait_until(self.ros.stationary, timeout=60.0, settle=1.5):
+            raise Abort(f"{label}: robot is not standing still")
+        pre = self.robot_pose()
+        if pre is None:
+            raise Abort(f"{label}: no map pose (TF) before re-anchoring")
+        drift = math.hypot(pre["x"] - exp.start.x, pre["y"] - exp.start.y)
+        yaw_err = abs(math.atan2(math.sin(pre["yaw"] - exp.start.yaw), math.cos(pre["yaw"] - exp.start.yaw)))
+        rec = {"label": label, "pre_anchor_pose": pre, "drift_m": drift, "drift_yaw_rad": yaw_err,
+               "time": now_s()}
+        self.results.setdefault("anchors", []).append(rec)
+        self.log(f"{label}: odometry drift at marker {exp.start_marker}: {drift:.3f} m, "
+                 f"{math.degrees(yaw_err):.1f} deg")
+        if drift > exp.max_anchor_drift_m or yaw_err > exp.max_anchor_drift_yaw_rad:
+            raise Abort(f"{label}: odometry drift {drift:.2f} m / {math.degrees(yaw_err):.0f} deg exceeds "
+                        f"{exp.max_anchor_drift_m} m / {math.degrees(exp.max_anchor_drift_yaw_rad):.0f} deg: "
+                        f"either the robot is not on the marker or odometry is not trustworthy")
+        anchor = self.ros.reanchor()
+        rec["anchor"] = anchor
+        ok = self.ros.wait_until(lambda: (lambda p: p is not None and math.hypot(
+            p["x"] - exp.start.x, p["y"] - exp.start.y) < 0.02)(self.robot_pose()), timeout=5.0)
+        post = self.robot_pose()
+        if not ok or post is None:
+            raise Abort(f"{label}: map pose did not settle on the marker after re-anchoring: {post}")
+        self.log(f"{label}: re-anchored (epoch {anchor.get('epoch')}); robot at map "
+                 f"({post['x']:.3f}, {post['y']:.3f}, yaw {post['yaw']:.3f})")
+        return post
 
     # -- planning -----------------------------------------------------------------------
 
@@ -333,9 +368,14 @@ class Runner:
             raise Abort(f"{label}: refusing to execute a malformed route: {plan['validation_problems']}")
         self.arming_screen(label, plan)
         self.confirm(ARM_PHRASE, f"{label}: arm the robot for this exact route.")
+        if self.ros.stop_requested:
+            raise Abort(f"{label}: operator stop requested; not sending the goal")
         pre = self.ros.preexec_problems()
+        if self.bag_proc is not None and self.bag_proc.poll() is not None:
+            pre.append("rosbag recorder is not running")
         if pre:
             raise Abort(f"{label}: not safe to send the goal: {pre}")
+        epoch0 = self.ros.anchor_epoch()
         loc0 = dict(self.ros.loc_status or {})
         motion_sources = self.ros.motion_sources()
         plans_before = self.ros.plan_msgs
@@ -385,6 +425,10 @@ class Runner:
                     result = status
                     break
                 why = self.ros.live_abort_condition(motion_sources)
+                if not why and self.ros.anchor_epoch() != epoch0:
+                    why = f"ANCHOR_CHANGED: map re-anchored during the route ({epoch0} -> {self.ros.anchor_epoch()})"
+                if not why and self.bag_proc is not None and self.bag_proc.poll() is not None:
+                    why = "BAG_RECORDER_DIED: the evidence recording stopped"
                 if why:
                     abort = why
                     break
@@ -429,39 +473,42 @@ class Runner:
         if abort:
             self.results["trials"][label] = {"execution": rec}
             raise Abort(f"{label}: {abort}")
+        if not post.get("stationary_after") or post.get("command_persisted_after_goal"):
+            self.results["trials"][label] = {"execution": rec}
+            raise Abort(f"{label}: robot not still / command persists after the goal ended: {post}")
         if not rec["succeeded"]:
             self.results["trials"][label] = {"execution": rec}
             raise Abort(f"{label}: Nav2 FollowPath ended {result}")
         return rec
 
     def cancel_and_verify_stop(self, gh) -> dict:
+        """Cancel, then verify on BOTH the command and the robot's odometry."""
         cancelled = self.ros.cancel(gh)
         t0 = now_s()
-        persisted = False
-        nonzero_after = 0
+        cmd_persisted = False
         while now_s() - t0 < 3.0:
-            cmd = self.ros.last_cmd_vel_nonzero_age()
-            if cmd is not None and now_s() - t0 > 1.0 and cmd < 0.2:
-                nonzero_after += 1
-                persisted = True
+            age = self.ros.last_cmd_vel_nonzero_age()
+            if age is not None and age < 0.2 and now_s() - t0 > 1.0:
+                cmd_persisted = True
             time.sleep(0.1)
+        still = self.ros.wait_until(self.ros.stationary, timeout=2.0)
+        persisted = cmd_persisted or not still
         if persisted:
-            self.banner("MOTION COMMAND PERSISTS AFTER GOAL CANCELLATION.\n"
+            self.banner("MOTION PERSISTS AFTER GOAL CANCELLATION (command or odometry).\n"
                         "USE THE HANDHELD REMOTE / E-STOP NOW. The trial is aborted.")
-        spd = self.ros.speed()
-        return {"cancel_accepted": cancelled, "command_persisted_after_cancel": persisted,
-                "nonzero_cmd_samples_after_1s": nonzero_after, "speed_after": spd}
+        return {"cancel_accepted": cancelled, "command_persisted_after_cancel": cmd_persisted,
+                "robot_stationary_after_cancel": still, "motion_persisted": persisted,
+                "speed_after": self.ros.speed()}
 
     def verify_still_after(self, label: str) -> dict:
         ok = self.ros.wait_until(self.ros.stationary, timeout=5.0, settle=1.0)
-        persisted = False
         age = self.ros.last_cmd_vel_nonzero_age()
-        if age is not None and age < 0.2:
-            persisted = True
+        persisted = age is not None and age < 0.2
         if not ok or persisted:
             self.banner(f"{label}: robot not still after the goal ended (still={ok}, "
                         f"command persists={persisted}). Use the remote if it is moving.")
-        return {"stationary_after": ok, "command_persisted_after_goal": persisted}
+        return {"stationary_after": ok, "command_persisted_after_goal": persisted,
+                "speed_after": self.ros.speed()}
 
     # -- trials ------------------------------------------------------------------------------
 
@@ -494,6 +541,7 @@ class Runner:
                      f"{mode} at t={capture['t']:.2f}.")
         before = self.db_status()
         grid_before = self.ros.global_cost_at(capture["x"], capture["y"])
+        probe_cells = self.ros.low_cost_cells_near(capture["x"], capture["y"], 0.3, max_cost=30)
         eid = str(uuid.uuid4())
         detail = {"capture_mode": mode, "tf_target": "map", "tf_source": "base_link",
                   "captured_at": capture["t"], "capture_tf": capture.get("tf"),
@@ -512,8 +560,11 @@ class Runner:
         err = math.hypot(row.position[0] - capture["x"], row.position[1] - capture["y"])
         ok_row = (err < 1e-6 and row.frame_id == "map" and row.provenance.value == "OPERATOR_INJECTED"
                   and row.map_id == self.map_id and row.run_mode == self.mode)
-        nav_ok = self.ros.wait_until(lambda: (self.ros.global_cost_at(capture["x"], capture["y"]) or 0)
-                                     >= 60, timeout=10.0)
+        # "Nav2 received it" = cells near the event that had LOW cost before
+        # (no inflation from the box or wall) rose by >= 30 in Nav2's own
+        # global costmap. An absolute threshold could be met by inflation alone.
+        nav_ok = bool(probe_cells) and self.ros.wait_until(
+            lambda: self.ros.mean_rise(probe_cells) >= 30.0, timeout=10.0)
         rec = {
             "label": label, "event_id": eid, "capture": capture, "capture_mode": mode,
             "stored": {"position": list(row.position), "frame_id": row.frame_id,
@@ -527,6 +578,8 @@ class Runner:
             "nav2_global_cost_before": grid_before,
             "nav2_global_cost_after": self.ros.global_cost_at(capture["x"], capture["y"]),
             "nav2_received": nav_ok,
+            "nav2_probe_cells": len(probe_cells),
+            "nav2_mean_cost_rise_low_cost_cells": self.ros.mean_rise(probe_cells) if probe_cells else None,
         }
         self.log(f"{label}: stored {eid} at ({row.position[0]:.3f}, {row.position[1]:.3f}) row_ok={ok_row} "
                  f"grid={rec['risk_grid_value_at_event']} nav2 cost {grid_before} -> "
@@ -548,7 +601,13 @@ class Runner:
         import rclpy
         rclpy.init()
         self.ros = TrialRos(self)
-        signal.signal(signal.SIGINT, lambda *_: self.ros.request_stop())
+        def _on_sigint(*_):
+            # During a route: the execute loop sees the flag and cancels the
+            # goal. Anywhere else: abort right now (prompts included).
+            self.ros.request_stop()
+            if self._goal_handle is None:
+                raise KeyboardInterrupt
+        signal.signal(signal.SIGINT, _on_sigint)
         status = "INCOMPLETE"
         try:
             self.banner(f"RiskGraph live trial [{self.mode.upper()}]\nevidence: {self.run_dir}\n"
@@ -624,16 +683,25 @@ class Runner:
             self.abort_reason = str(exc)
             status = "ABORTED"
             self.banner(f"ABORTED: {exc}")
+        except KeyboardInterrupt:
+            self.abort_reason = "OPERATOR_CANCEL (Ctrl-C)"
+            status = "ABORTED"
+            self.banner("ABORTED by operator (Ctrl-C)")
         except Exception as exc:  # anything unexpected is an abort, with a traceback
             self.abort_reason = f"{type(exc).__name__}: {exc}"
             status = "ERROR"
             self.log(traceback.format_exc())
         finally:
+            signal.signal(signal.SIGINT, signal.SIG_IGN)  # cleanup must not be interrupted
             try:
                 if self._goal_handle is not None:
                     self.cancel_and_verify_stop(self._goal_handle)
             except Exception:
                 pass
+            try:
+                self.results["cancel_all_at_exit"] = self.ros.cancel_all()
+            except Exception as exc:
+                self.log(f"cancel-all failed: {exc}")
             try:
                 self.snapshot_graph("end")
             except Exception as exc:

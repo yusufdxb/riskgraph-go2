@@ -38,6 +38,22 @@ UNVERIFIED: everything below was exercised off-robot (unit tests, real ROS 2
 - ROS integration tests (`tests/integration`, real processes and Nav2) and a
   CI job running them in `ros:humble`.
 
+### Off-robot evidence for this version (REHEARSAL, not hardware)
+`scripts/rehearse_live_trial.sh` against the stand-in robot, the HELIX
+arbiter and the armed sport sink, run 2026-09-18 on a workstation:
+- Trial A: Nav2 plans the left corridor (5.49 m); executed 5.09 m in 28.9 s,
+  max cross-track 0.07 m, max speed 0.18 m/s.
+- Trial B: event stored at the TF-captured pose (error 0.0 m); risk grid 90 at
+  the event; Nav2 global cost of 70 low-inflation cells nearby rose by 82 on average.
+- Trial C: plan moves to the right corridor (5.84 m), accumulated risk
+  1.073 -> 0.000, mean separation 1.22 m; executed 5.43 m in 31.2 s.
+- Trial D: RiskGraph stopped (exit 0), blank layer, Nav2 plans left again;
+  restarted from the same file (1 -> 1 incidents), plans and walks right.
+- Trial E: both corridors risky: 5 identical valid plans, no lethal cells.
+- Recorded drift at the re-anchor points: 0.000 / 0.002 / 0.005 m.
+- Bag 55,287 messages; replay parity of an earlier rehearsal bag: 2/2 events,
+  0.0 m error, 0 grid cells different.
+
 ### Changed
 - **SQLite store v2**: `PRAGMA user_version` with in-place v1 migration,
   absolute paths only, map-id and evidence-class binding (a replay or

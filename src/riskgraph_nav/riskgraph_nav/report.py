@@ -34,7 +34,9 @@ def criteria(results: Dict, manifest: Dict, run_dir: str) -> List[Dict]:
     bag_ok = os.path.isdir(os.path.join(run_dir, "bag"))
     out = [
         ("1", "live localization fed the system (preflight GO: odometry, anchor, TF)", pre_ok),
-        ("2", "baseline A->B executed to success", _get(a, "execution", "succeeded") is True),
+        ("2", "baseline A->B executed to success and the robot stopped",
+         _get(a, "execution", "succeeded") is True and
+         _get(a, "execution", "post", "stationary_after") is True),
         ("3", "risk event stored at the captured live map pose",
          _get(b, "row_ok") is True and _get(b, "position_error_m") is not None
          and _get(b, "position_error_m") < 1e-6),
@@ -43,11 +45,13 @@ def criteria(results: Dict, manifest: Dict, run_dir: str) -> List[Dict]:
          (_get(b, "incidents_after") or 0) > (_get(b, "incidents_before") or 0)),
         ("5", "route risk cost changed as intended (aware plan lower under the same field)",
          _get(c, "comparison", "risk_reduced") is True),
-        ("6", "Nav2 received it (global costmap raised at the event)", _get(b, "nav2_received") is True),
+        ("6", "Nav2 received it (low-inflation cells at the event rose >= 30 in the global costmap)",
+         _get(b, "nav2_received") is True),
         ("7", "a physically different, lower-risk route was planned",
          _get(c, "comparison", "pass") is True),
         ("8", "the GO2 executed that route (executed corridor = planned, lower executed risk)",
          _get(c, "execution", "succeeded") is True and
+         _get(c, "execution", "post", "stationary_after") is True and
          _get(c, "execution", "executed_side") == _get(c, "plan", "side") and
          _get(c, "executed_comparison", "risk_reduced") is True),
         ("9", "restart did not erase the event (new process, same incident count, same DB)",
@@ -62,7 +66,8 @@ def criteria(results: Dict, manifest: Dict, run_dir: str) -> List[Dict]:
          pre_ok and all((_get(t.get(k, {}), "execution", "arbiter", "nonzero_while_hold") or 0) == 0
                         for k in ("A_baseline", "C_risk_aware"))),
         ("13", "evidence bundle complete (manifest, preflight, DB copies, logs, bag)",
-         all(os.path.exists(os.path.join(run_dir, f)) for f in files) and bag_ok),
+         all(os.path.exists(os.path.join(run_dir, f)) for f in files) and bag_ok
+         and _get(results, "bag", "ok") is True),
         ("E", "graceful fallback when avoidance is impossible", _get(e, "pass") is True),
     ]
     return [{"id": i, "criterion": txt, "pass": bool(ok)} for i, txt, ok in out]

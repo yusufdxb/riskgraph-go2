@@ -67,10 +67,11 @@ build if RiskGraph source creates such a publisher.
 ### Why these design choices
 
 * **Map frame = marker A.** A stock GO2 has no `map` frame and no `/tf`.
-  `riskgraph_localization` solves `map->odom` once, with the robot standing
-  still on marker A, so marker A is (0, 0, 0) in `map` every session.
-  Localization is the robot's own lidar odometry from there on; drift over the
-  ~6 m course is the limitation (section 10).
+  `riskgraph_localization` solves `map->odom` with the robot standing still on
+  marker A, so marker A is (0, 0, 0) in `map`. The runner re-anchors on the
+  physical marker before EVERY trial and records the odometry error it removes
+  (measured drift). Within a route, localization is the robot's own lidar
+  odometry; drift over one ~6 m route is the limitation (section 11).
 * **Risk is a planning cost, never an obstacle.** Grid values are capped at
   90 (Nav2 cost ~228, below inscribed 253), are not inflated, and are not in
   the local costmap. If every corridor is risky Nav2 still plans (Trial E).
@@ -186,7 +187,7 @@ rerun. Do not continue on NO-GO.
 
 ```bash
 # T4: the trial (Trials A-E), with evidence
-./scripts/run_live_trial.sh --helix-session $HSESSION --expected-branch <branch> --db-tag $(date +%Y%m%d)
+./scripts/run_live_trial.sh --helix-session $HSESSION --expected-branch <branch> --db-tag t$(date +%Y%m%d_%H%M)
 ```
 
 ## 6. What the runner does, and what you do
@@ -194,16 +195,20 @@ rerun. Do not continue on NO-GO.
 | Step | Runner | You |
 |---|---|---|
 | start | writes `manifest.json`, copies the DB, preflight (before launch), launches RiskGraph, preflight again (running), starts the rosbag | type `REMOTE IN HAND` |
-| Trial A | checks the robot is on A and still; asks Nav2 for a path to B; prints the **arming screen** (goal, pose, route, risk entries, arbiter, sink, Nav2 states, DB, SHA, map id) | check the route is the LEFT corridor; type `ARM LIVE GO2 RISKGRAPH TRIAL` |
+| every trial start | asks you to put the robot PHYSICALLY on marker A; records the odometry pose there as **measured drift** (aborts above 0.5 m / 20 deg); **re-anchors the map on the marker** | walk it onto the tape with the remote, release the sticks, Enter. Place by the tape, never by the printed pose |
+| Trial A | asks Nav2 for a path to B; prints the **arming screen** (goal, pose, route, risk entries, arbiter, sink, Nav2 states, DB, SHA, map id) | check the route is the LEFT corridor; type `ARM LIVE GO2 RISKGRAPH TRIAL` |
 | | sends that exact path to the controller and monitors (abort list, section 7) | spotter walks beside, remote ready |
 | Trial B | takes the robot pose it recorded (TF, live) where the baseline passed the box, stores an `OPERATOR_INJECTED` event there, verifies the SQLite row and that Nav2's costmap rose | type `INJECT RISK` |
-| Trial C | asks you to put the robot back on A | walk it back on A facing B with the remote, release sticks, Enter |
-| | plans again; requires the route to change corridor and lower risk BEFORE it will arm; arming screen | type `ARM LIVE GO2 RISKGRAPH TRIAL`; watch it take the RIGHT corridor |
+| Trial C | re-anchors on A (row above), plans again; requires the route to change corridor and lower risk BEFORE it will arm; arming screen | type `ARM LIVE GO2 RISKGRAPH TRIAL`; watch it take the RIGHT corridor |
 | Trial D | stops RiskGraph entirely; verifies the risk layer went blank and Nav2 plans LEFT again; relaunches RiskGraph from the same file; verifies a new process with the same incident count and that Nav2 plans RIGHT again | put the robot on A when asked; `y` to walk the D route (optional) |
 | Trial E | stores a second event on the right corridor (from the pose recorded in C), plans 5 times from A: valid, identical, non-lethal; plans to a goal inside a risk region | nothing |
 | end | stops the bag, copies the DB, stops RiskGraph, writes metrics, SVG, summary | one-line notes; type `OBSERVED` only if you saw the robot walk both routes with no stick input during navigation |
 
-Ctrl-C at any time cancels the active Nav2 goal and verifies the command stops.
+Ctrl-C at any time: during a route it cancels the Nav2 goal and verifies the
+robot stops (command AND odometry); anywhere else it aborts the run. Every
+exit path also sends a cancel for all FollowPath goals. Every abort keeps the
+evidence written so far. After an abort past Trial B, start the next attempt
+with a new `--db-tag` (the baseline needs an empty database).
 
 ## 7. Abort conditions (the runner aborts automatically on the first six)
 
@@ -213,6 +218,8 @@ Ctrl-C at any time cancels the active Nav2 goal and verifies the command stops.
 * another motion source appears (`/cmd_vel`, `/nav/cmd_vel`, `/api/sport/request` publishers change)
 * HELIX hold active, arbiter status stale, RiskGraph unhealthy / invalid grid / map id mismatch
 * no progress (< 0.2 m in 15 s: oscillation or stall), or > 120 s
+* RiskGraph status older than 3 s, the map re-anchored mid-route, or the rosbag recorder died
+* the robot is not still after the goal ends or is cancelled (odometry), or the command persists
 * **operator:** the GO2 moves unexpectedly, the command persists after cancel
   (the runner shouts `USE THE HANDHELD REMOTE`), the route shown is obviously
   malformed, or the spotter loses a reliable stop. Use the remote / e-stop
@@ -271,6 +278,7 @@ Replay parity afterwards (off-robot): `./scripts/replay_trial_bag.sh <run_dir>`.
 |---|---|
 | P14 odometry 0 Hz but topic listed | Cyclone interface (section 4), `ros2 daemon stop` |
 | P17 UNANCHORED | robot was moving at launch: stay still on A, or `ros2 service call /riskgraph/localization/anchor std_srvs/srv/Trigger` |
+| "drift exceeds" abort | robot not on the tape, or odometry jumped/drifted: re-place on A and rerun with a new `--db-tag` |
 | P17 JUMP | odometry jumped (robot rebooted or odom reset): put the robot on A, call the anchor service |
 | P20 extra TF publisher | another stack publishes `/tf` (e.g. an odom broadcaster): stop it |
 | P27 / P28 map or class mismatch | the DB belongs to another course or a rehearsal: use a new `--db-tag` |
@@ -290,9 +298,12 @@ Useful: `ros2 topic echo --once /riskgraph/localization/status`,
   walking. The GO2 moved at 0.15 m/s in HELIX stage D; whether mcf tracks
   combined forward + yaw well enough to follow the curve round the box is
   unmeasured (the gait notes say combined commands degrade).
-* **Odometry drift** over ~12 m of walking per trial, and after walking the
-  robot back by hand: the runner requires the robot within 0.30 m / 20 deg of
-  A before each trial, so drift shows up as a refused start, not as bad data.
+* **Odometry drift.** Odometry cannot see its own drift, so the map is
+  re-anchored on the physical marker before every trial and the pre-anchor
+  error is recorded as measured drift (`summary.json` `anchors`). Drift
+  accumulated WITHIN one ~6 m route is not corrected; the physical box and the
+  map box could disagree by that much. The spotter watches the robot's
+  clearance to the box; a visible mismatch is an abort.
 * **Physical stop latency and distance** through the HELIX chain are HELIX's
   stage-E measurements, not RiskGraph's.
 * **Nav2 on the payload** is not yet confirmed installed (section 2).

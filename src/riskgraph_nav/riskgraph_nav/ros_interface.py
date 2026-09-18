@@ -247,8 +247,16 @@ class TrialRos:
             q = quat_from_yaw(yaw)
             ps.pose.orientation.x, ps.pose.orientation.y, ps.pose.orientation.z, ps.pose.orientation.w = q
             g.path.poses.append(ps)
-        gh = self._wait_future(self._follow_ac.send_goal_async(g), 10.0)
-        if gh is None or not gh.accepted:
+        fut = self._follow_ac.send_goal_async(g)
+        gh = self._wait_future(fut, 10.0)
+        if gh is None:
+            # Acceptance may still arrive later: cancel it the moment it does,
+            # so a goal can never run without the monitor loop watching it.
+            fut.add_done_callback(lambda f: f.result().cancel_goal_async()
+                                  if f.result() is not None and f.result().accepted else None)
+            self.cancel_all()
+            raise RuntimeError("FollowPath goal acceptance timed out; cancel requested")
+        if not gh.accepted:
             raise RuntimeError("FollowPath goal rejected by controller_server")
         gh._rg_result = gh.get_result_async()
         return gh
@@ -266,6 +274,30 @@ class TrialRos:
             return bool(r is not None and len(r.goals_canceling) > 0)
         except Exception:
             return False
+
+    def cancel_all(self) -> Optional[int]:
+        """Cancel EVERY FollowPath goal (zero goal id + zero stamp = all goals)."""
+        from action_msgs.msg import GoalInfo
+        from action_msgs.srv import CancelGoal
+        r = self.probe._call(CancelGoal, "/follow_path/_action/cancel_goal",
+                             CancelGoal.Request(goal_info=GoalInfo()), timeout=2.0)
+        return None if r is None else int(r.return_code)
+
+    def reanchor(self) -> dict:
+        from std_srvs.srv import Trigger
+        r = self.probe._call(Trigger, "/riskgraph/localization/anchor", Trigger.Request(), timeout=5.0)
+        if r is None:
+            raise RuntimeError("anchor service /riskgraph/localization/anchor not available")
+        if not r.success:
+            raise RuntimeError(f"re-anchoring refused: {r.message}")
+        rec = json.loads(r.message)
+        self.loc_status_t = 0.0  # force a fresh status before anything relies on it
+        self.wait_until(lambda: time.time() - self.loc_status_t < 0.5 and
+                        ((self.loc_status or {}).get("anchor") or {}).get("epoch") == rec.get("epoch"), 5.0)
+        return rec
+
+    def anchor_epoch(self) -> Optional[int]:
+        return ((self.loc_status or {}).get("anchor") or {}).get("epoch")
 
     def nav_states(self) -> Dict[str, Optional[str]]:
         return {n: self.probe.lifecycle_state(n) for n in
@@ -297,6 +329,35 @@ class TrialRos:
 
     def risk_grid_data(self) -> List[int]:
         return list(self.risk_grid.data) if self.risk_grid is not None else []
+
+    def low_cost_cells_near(self, x: float, y: float, radius: float, max_cost: int
+                            ) -> List[Tuple[int, int]]:
+        """(index, cost_before) of global-costmap cells within radius whose
+        current cost is <= max_cost: cells not dominated by inflation."""
+        g = self.global_grid
+        if g is None:
+            return []
+        out = []
+        res = g.info.resolution
+        ox, oy = g.info.origin.position.x, g.info.origin.position.y
+        n = int(math.ceil(radius / res))
+        ci = int(math.floor((x - ox) / res))
+        cj = int(math.floor((y - oy) / res))
+        for j in range(cj - n, cj + n + 1):
+            for i in range(ci - n, ci + n + 1):
+                if 0 <= i < g.info.width and 0 <= j < g.info.height:
+                    cx, cy = ox + (i + 0.5) * res, oy + (j + 0.5) * res
+                    if math.hypot(cx - x, cy - y) <= radius:
+                        v = int(g.data[j * g.info.width + i])
+                        if 0 <= v <= max_cost:
+                            out.append((j * g.info.width + i, v))
+        return out
+
+    def mean_rise(self, cells: List[Tuple[int, int]]) -> float:
+        g = self.global_grid
+        if g is None or not cells:
+            return 0.0
+        return sum(int(g.data[i]) - v for i, v in cells) / len(cells)
 
     def static_lethal(self, x: float, y: float) -> bool:
         v = self._cell(self.map_grid, x, y)
@@ -377,6 +438,8 @@ class TrialRos:
         if a.get("hold_active"):
             return f"HELIX_HOLD: {a.get('reason')} (trial confounded; the arbiter is forcing zero)"
         st = self.rg_status or {}
+        if now - self.rg_status_t > 3.0:
+            return "RISKGRAPH_STATUS_STALE: no /riskgraph/status for > 3 s (process down?)"
         if st.get("map_id") != self.r.map_id:
             return f"MAP_ID_MISMATCH: RiskGraph reports {st.get('map_id')}"
         if st.get("health"):

@@ -47,3 +47,8 @@ experiment:
     max_speed_mps: 0.35       # abort above this (HELIX sink caps commands at 0.25)
     stationary_speed_mps: 0.05
     max_execution_s: 120.0
+    # Before every trial the robot is put back on marker A by hand and the map
+    # is re-anchored there. The odometry pose just before re-anchoring is the
+    # measured drift; above these limits the run aborts.
+    max_anchor_drift_m: 0.5
+    max_anchor_drift_yaw_rad: 0.35
