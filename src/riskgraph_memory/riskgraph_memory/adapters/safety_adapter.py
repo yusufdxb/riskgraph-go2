@@ -14,6 +14,7 @@ from __future__ import annotations
 import sys
 
 import rclpy
+from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
 from geometry_msgs.msg import Point
@@ -21,7 +22,7 @@ from std_msgs.msg import Header
 
 from riskgraph_msgs.msg import RiskEvent as RiskEventMsg, RiskFactor as RiskFactorMsg
 
-from .pose_tagging import PoseTaggingMixin, stamp_seconds
+from .pose_tagging import PoseTaggingMixin, new_event_id, stamp_seconds
 
 try:
     from go2_msgs.msg import SafetyAlert  # noqa: F401
@@ -66,11 +67,15 @@ class SafetyAdapter(PoseTaggingMixin, Node):
         out = RiskEventMsg()
         out.header = Header()
         out.header.stamp = msg.header.stamp
-        out.event_id = ""  # memory node will not regen; use new_id pattern in conversions
+        out.event_id = new_event_id()
+        out.provenance = "HARDWARE_DERIVED"
         # The alert's own frame_id names the detecting sensor, not a position,
         # so the event's frame is whatever the pose stamp establishes.
         out.position = Point()
-        self.stamp_pose(out, stamp_seconds(msg.header.stamp))
+        # Pose at receipt, on this node's clock: the alert's own stamp may come
+        # from a different (skewed) clock, and the robot has not moved far in
+        # one callback. The alert stamp stays on the header as the event time.
+        self.stamp_pose(out, stamp_seconds(self.get_clock().now().to_msg()))
         f = RiskFactorMsg()
         f.category = cat
         f.severity = float(sev)
@@ -94,11 +99,11 @@ def main(args=None) -> None:
     node = SafetyAdapter()
     try:
         rclpy.spin(node)
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, ExternalShutdownException):
         pass
     finally:
         node.destroy_node()
-        rclpy.shutdown()
+        rclpy.try_shutdown()
 
 
 if __name__ == "__main__":

@@ -12,6 +12,7 @@ published unposed rather than stamped at the origin.
 from __future__ import annotations
 
 import rclpy
+from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
 from std_msgs.msg import Bool, Header
@@ -19,7 +20,7 @@ from geometry_msgs.msg import Point
 
 from riskgraph_msgs.msg import RiskEvent as RiskEventMsg, RiskFactor as RiskFactorMsg
 
-from .pose_tagging import PoseTaggingMixin, stamp_seconds
+from .pose_tagging import PoseTaggingMixin, new_event_id, stamp_seconds
 
 
 class TactileAdapter(PoseTaggingMixin, Node):
@@ -45,7 +46,8 @@ class TactileAdapter(PoseTaggingMixin, Node):
             out = RiskEventMsg()
             out.header = Header()
             out.header.stamp = now
-            out.event_id = ""
+            out.event_id = new_event_id()
+            out.provenance = "HARDWARE_DERIVED"
             out.position = Point()
             self.stamp_pose(out, stamp_seconds(now))
             f = RiskFactorMsg()
@@ -64,11 +66,11 @@ def main(args=None) -> None:
     node = TactileAdapter()
     try:
         rclpy.spin(node)
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, ExternalShutdownException):
         pass
     finally:
         node.destroy_node()
-        rclpy.shutdown()
+        rclpy.try_shutdown()
 
 
 if __name__ == "__main__":

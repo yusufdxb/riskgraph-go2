@@ -2,11 +2,20 @@
 
 Provides /riskgraph/score_routes (ScoreRoutes.srv). Reads weights and store
 location from parameters; opens the same SQLite file the memory node writes to,
-so scoring sees the live event log.
+READ-ONLY, so scoring sees the live event log and can never create or modify it.
+
+The store is opened lazily: if the memory node has not created the database
+yet, a request fails loudly (empty result, explanation says why) and the next
+request retries. ``store_path`` must be absolute; ``expected_map_id`` (if set)
+must match the id the database is bound to.
+
+This service scores explicit candidate routes (segment keyed). The live Nav2
+integration does not go through it; Nav2 consumes /riskgraph/risk_costmap.
 """
 from __future__ import annotations
 
 import rclpy
+from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
 from std_msgs.msg import Header
@@ -18,7 +27,7 @@ from riskgraph_msgs.msg import (
     RouteExplanation as RouteExplanationMsg,
 )
 
-from riskgraph_core.store import RiskStore
+from riskgraph_core.store import RiskStore, StoreError
 from riskgraph_core.scoring import ScoringWeights, score_routes
 from riskgraph_core.explainer import explain_choice
 
@@ -28,14 +37,19 @@ from riskgraph_memory.conversions import msg_route_to_core
 class PlannerNode(Node):
     def __init__(self) -> None:
         super().__init__("riskgraph_planner")
-        self.declare_parameter("store_path", ":memory:")
+        self.declare_parameter("store_path", "")
+        self.declare_parameter("expected_map_id", "")
         self.declare_parameter("weight_geometry", 1.0)
         self.declare_parameter("weight_semantic", 1.0)
         self.declare_parameter("weight_risk", 2.0)
         self.declare_parameter("decay_half_life_s", 0.0)
 
         store_path = self.get_parameter("store_path").get_parameter_value().string_value
-        self._store = RiskStore(store_path)
+        self._store_path = store_path
+        self._expected_map_id = self.get_parameter("expected_map_id").value or None
+        self._store = None
+        self._store_error = ""
+        self._open_store()
 
         qos = QoSProfile(reliability=ReliabilityPolicy.RELIABLE,
                          history=HistoryPolicy.KEEP_LAST, depth=10)
@@ -46,6 +60,18 @@ class PlannerNode(Node):
             ScoreRoutes, "/riskgraph/score_routes", self._on_score
         )
         self.get_logger().info(f"riskgraph_planner ready, store_path={store_path}")
+
+    def _open_store(self):
+        if self._store is not None:
+            return self._store
+        try:
+            self._store = RiskStore(self._store_path, readonly=True,
+                                    map_id=self._expected_map_id)
+            self._store_error = ""
+        except StoreError as exc:
+            self._store_error = str(exc)
+            self.get_logger().error(f"risk store unavailable: {exc}")
+        return self._store
 
     def _weights(self) -> ScoringWeights:
         return ScoringWeights(
@@ -59,6 +85,11 @@ class PlannerNode(Node):
                   response: ScoreRoutes.Response) -> ScoreRoutes.Response:
         candidates = [msg_route_to_core(r) for r in request.candidates]
         weights = self._weights()
+        if self._open_store() is None:
+            response.result = RouteScoreArrayMsg()
+            response.explanation = RouteExplanationMsg()
+            response.explanation.text = f"risk store unavailable: {self._store_error}"
+            return response
         result = score_routes(
             candidates, self._store, weights,
             semantic_objective=str(request.semantic_objective),
@@ -100,23 +131,26 @@ class PlannerNode(Node):
         return response
 
     def destroy_node(self) -> bool:
-        try:
-            self._store.close()
-        except Exception:
-            pass
+        if self._store is not None:
+            try:
+                self._store.close()
+            except Exception:
+                pass
         return super().destroy_node()
 
 
 def main(args=None) -> None:
-    rclpy.init(args=args)
+    # Own SIGINT/SIGTERM handling: rclpy's default handler tears the context
+    # down under the executor and the process used to exit non-zero.
+    from rclpy.signals import SignalHandlerOptions
+    from riskgraph_memory.memory_node import run_until_signal
+    rclpy.init(args=args, signal_handler_options=SignalHandlerOptions.NO)
     node = PlannerNode()
     try:
-        rclpy.spin(node)
-    except KeyboardInterrupt:
-        pass
+        run_until_signal(node)
     finally:
         node.destroy_node()
-        rclpy.shutdown()
+        rclpy.try_shutdown()
 
 
 if __name__ == "__main__":

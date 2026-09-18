@@ -1,0 +1,173 @@
+# Nav2 configuration for the RiskGraph live GO2 trial (ROS 2 Humble, Nav2 1.1).
+#
+# What runs: map_server, planner_server, controller_server, velocity_smoother,
+# one lifecycle manager. What does NOT run, deliberately:
+#   * bt_navigator / behavior_server: no recovery behaviors (spin, back up)
+#     that would move the robot in ways the operator did not approve. The
+#     trial runner asks planner_server for ONE path, shows it, and after the
+#     operator arms, sends exactly that path to controller_server.
+#   * amcl: there is no lidar scan pipeline on a stock GO2 in this setup; the
+#     map frame is anchored on the start marker (riskgraph_localization).
+#
+# Motion path (see docs/HW_VERIFICATION.md):
+#   controller_server -> /cmd_vel_nav -> velocity_smoother -> /nav/cmd_vel
+#   -> helix_arbiter -> /cmd_vel -> helix_go2_sport_sink -> /api/sport/request
+# RiskGraph and Nav2 never publish /cmd_vel or /api/sport/request.
+#
+# Velocity limits must stay strictly inside the HELIX sport sink limits
+# (0.25 m/s, 0.20 m/s, 0.50 rad/s): the sink REJECTS over-limit commands with
+# StopMove rather than clamping them. test_nav2_config.py enforces this.
+
+map_server:
+  ros__parameters:
+    use_sim_time: false
+    yaml_filename: ""          # set by riskgraph_nav_live.launch.py from the experiment file
+    topic_name: map
+    frame_id: map
+
+planner_server:
+  ros__parameters:
+    use_sim_time: false
+    expected_planner_frequency: 1.0
+    planner_plugins: ["GridBased"]
+    GridBased:
+      plugin: "nav2_navfn_planner/NavfnPlanner"
+      tolerance: 0.25
+      use_astar: false
+      allow_unknown: false
+
+global_costmap:
+  global_costmap:
+    ros__parameters:
+      use_sim_time: false
+      global_frame: map
+      robot_base_frame: base_link
+      update_frequency: 2.0
+      publish_frequency: 1.0
+      rolling_window: false
+      resolution: 0.05
+      robot_radius: 0.35       # GO2 body ~0.70 x 0.31 m
+      transform_tolerance: 0.5
+      always_send_full_costmap: true
+      # Shared by BOTH static layers below. trinary_costmap false lets the
+      # RiskGraph grid's intermediate values (1..90) through as costs;
+      # map_server publishes only 0/100/-1, so the course map is unaffected.
+      track_unknown_space: false
+      trinary_costmap: false
+      use_maximum: true
+      lethal_cost_threshold: 100
+      plugins: ["static_layer", "riskgraph_layer", "inflation_layer"]
+      static_layer:
+        plugin: "nav2_costmap_2d::StaticLayer"
+        map_subscribe_transient_local: true
+        map_topic: /map
+      # RiskGraph's remembered risk: an OccupancyGrid with the same geometry
+      # as /map, values 0..90 (never lethal). Planning cost only.
+      riskgraph_layer:
+        plugin: "nav2_costmap_2d::StaticLayer"
+        map_subscribe_transient_local: true
+        subscribe_to_updates: false
+        map_topic: /riskgraph/risk_costmap
+      inflation_layer:
+        plugin: "nav2_costmap_2d::InflationLayer"
+        inflation_radius: 0.55
+        cost_scaling_factor: 3.0
+
+controller_server:
+  ros__parameters:
+    use_sim_time: false
+    controller_frequency: 10.0
+    min_x_velocity_threshold: 0.001
+    min_y_velocity_threshold: 0.5
+    min_theta_velocity_threshold: 0.001
+    failure_tolerance: 0.3
+    progress_checker_plugin: "progress_checker"
+    goal_checker_plugins: ["goal_checker"]
+    controller_plugins: ["FollowPath"]
+    progress_checker:
+      plugin: "nav2_controller::SimpleProgressChecker"
+      required_movement_radius: 0.25
+      movement_time_allowance: 15.0
+    goal_checker:
+      plugin: "nav2_controller::SimpleGoalChecker"
+      xy_goal_tolerance: 0.35
+      yaw_goal_tolerance: 6.28   # heading at B is not part of the claim
+      stateful: true
+    FollowPath:
+      plugin: "nav2_regulated_pure_pursuit_controller::RegulatedPurePursuitController"
+      desired_linear_vel: 0.18
+      lookahead_dist: 0.6
+      min_lookahead_dist: 0.4
+      max_lookahead_dist: 0.9
+      lookahead_time: 1.5
+      use_velocity_scaled_lookahead_dist: false
+      # The GO2 mcf gait does not step for in-place yaw below ~1.0 rad/s and
+      # the sink rejects > 0.5 rad/s, so in-place rotation is disabled; the
+      # course starts and ends facing along the route.
+      use_rotate_to_heading: false
+      rotate_to_heading_angular_vel: 0.4
+      rotate_to_heading_min_angle: 0.785
+      max_angular_accel: 1.0
+      allow_reversing: false
+      transform_tolerance: 0.5
+      min_approach_linear_velocity: 0.08
+      approach_velocity_scaling_dist: 0.4
+      use_collision_detection: true
+      max_allowed_time_to_collision_up_to_carrot: 1.0
+      use_regulated_linear_velocity_scaling: true
+      use_cost_regulated_linear_velocity_scaling: false
+      regulated_linear_scaling_min_radius: 0.9
+      regulated_linear_scaling_min_speed: 0.10
+      max_robot_pose_search_dist: 2.0
+      use_interpolation: true
+
+local_costmap:
+  local_costmap:
+    ros__parameters:
+      use_sim_time: false
+      global_frame: odom
+      robot_base_frame: base_link
+      rolling_window: true
+      width: 4
+      height: 4
+      resolution: 0.05
+      robot_radius: 0.35
+      update_frequency: 5.0
+      publish_frequency: 2.0
+      transform_tolerance: 0.5
+      # The course boundary and the obstacle come from the map. The GO2 lidar
+      # is NOT used as an obstacle source: its stamps are on the robot clock
+      # (months skewed) and its extrinsics were measured pose-dependent. See
+      # docs/HW_VERIFICATION.md "Known limitations".
+      plugins: ["static_layer", "inflation_layer"]
+      static_layer:
+        plugin: "nav2_costmap_2d::StaticLayer"
+        map_subscribe_transient_local: true
+        map_topic: /map
+      inflation_layer:
+        plugin: "nav2_costmap_2d::InflationLayer"
+        inflation_radius: 0.55
+        cost_scaling_factor: 3.0
+
+velocity_smoother:
+  ros__parameters:
+    use_sim_time: false
+    smoothing_frequency: 20.0
+    scale_velocities: false
+    feedback: "OPEN_LOOP"
+    # [vx, vy, wz]. Strictly inside the HELIX sink limits (0.25, 0.20, 0.50).
+    max_velocity: [0.20, 0.0, 0.40]
+    min_velocity: [0.0, 0.0, -0.40]
+    max_accel: [0.5, 0.0, 1.0]
+    max_decel: [-0.8, 0.0, -1.5]
+    odom_topic: "/utlidar/robot_odom"
+    odom_duration: 0.1
+    deadband_velocity: [0.0, 0.0, 0.0]
+    velocity_timeout: 0.5
+
+lifecycle_manager_riskgraph_nav:
+  ros__parameters:
+    use_sim_time: false
+    autostart: true
+    bond_timeout: 4.0
+    node_names: ["map_server", "planner_server", "controller_server", "velocity_smoother"]

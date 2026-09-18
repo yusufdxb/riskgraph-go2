@@ -11,6 +11,7 @@ otherwise it falls back to the dominant_factor_categories already on the score.
 from __future__ import annotations
 
 import rclpy
+from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
 from std_msgs.msg import Header
@@ -20,7 +21,7 @@ from riskgraph_msgs.msg import (
     RouteExplanation as RouteExplanationMsg,
 )
 
-from riskgraph_core.store import RiskStore
+from riskgraph_core.store import RiskStore, StoreError
 
 
 def _factor_human(category: str, plural: bool) -> str:
@@ -37,7 +38,7 @@ def _factor_human(category: str, plural: bool) -> str:
 class ExplainerNode(Node):
     def __init__(self) -> None:
         super().__init__("riskgraph_explainer")
-        self.declare_parameter("store_path", ":memory:")
+        self.declare_parameter("store_path", "")
         self.declare_parameter("input_topic", "/riskgraph/route_scores")
         self.declare_parameter("output_topic", "/riskgraph/explanations")
 
@@ -45,17 +46,24 @@ class ExplainerNode(Node):
         in_topic = self.get_parameter("input_topic").get_parameter_value().string_value
         out_topic = self.get_parameter("output_topic").get_parameter_value().string_value
 
-        try:
-            self._store = RiskStore(store_path)
-        except Exception as exc:
-            self.get_logger().warn(f"RiskStore unavailable ({exc}); evidence ids will be empty")
-            self._store = None
+        self._store_path = store_path
+        self._store = None
+        self._open_store()
 
         qos = QoSProfile(reliability=ReliabilityPolicy.RELIABLE,
                          history=HistoryPolicy.KEEP_LAST, depth=10)
         self._pub = self.create_publisher(RouteExplanationMsg, out_topic, qos)
         self._sub = self.create_subscription(RouteScoreArrayMsg, in_topic, self._on_scores, qos)
         self.get_logger().info(f"riskgraph_explainer ready, {in_topic} → {out_topic}")
+
+    def _open_store(self):
+        """Read-only and lazy: the explainer never creates or writes the DB."""
+        if self._store is None:
+            try:
+                self._store = RiskStore(self._store_path, readonly=True)
+            except StoreError as exc:
+                self.get_logger().warn(f"RiskStore unavailable ({exc}); evidence ids will be empty")
+        return self._store
 
     def _on_scores(self, msg: RouteScoreArrayMsg) -> None:
         if not msg.scores:
@@ -69,7 +77,7 @@ class ExplainerNode(Node):
                 f"Recommended route {chosen.route_id}; the dominant remaining risk on this "
                 f"path is {_factor_human(cat, plural=True)} on segment {seg}."
             )
-            if self._store is not None:
+            if self._open_store() is not None:
                 evidence = self._store.evidence_for_segment(seg, max_events=3)
                 evidence_ids = [e.event_id for e in evidence]
         else:
@@ -94,15 +102,17 @@ class ExplainerNode(Node):
 
 
 def main(args=None) -> None:
-    rclpy.init(args=args)
+    # Own SIGINT/SIGTERM handling: rclpy's default handler tears the context
+    # down under the executor and the process used to exit non-zero.
+    from rclpy.signals import SignalHandlerOptions
+    from riskgraph_memory.memory_node import run_until_signal
+    rclpy.init(args=args, signal_handler_options=SignalHandlerOptions.NO)
     node = ExplainerNode()
     try:
-        rclpy.spin(node)
-    except KeyboardInterrupt:
-        pass
+        run_until_signal(node)
     finally:
         node.destroy_node()
-        rclpy.shutdown()
+        rclpy.try_shutdown()
 
 
 if __name__ == "__main__":

@@ -9,6 +9,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import rclpy
+from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
 from std_msgs.msg import Header
@@ -74,6 +75,7 @@ class SyntheticPublisher(Node):
             fm.detail = f.detail
             msg.factors.append(fm)
         msg.confidence = float(ev.confidence)
+        msg.provenance = "SYNTHETIC"
         self._pub.publish(msg)
 
 
@@ -82,11 +84,11 @@ def main(args=None) -> None:
     node = SyntheticPublisher()
     try:
         rclpy.spin(node)
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, ExternalShutdownException):
         pass
     finally:
         node.destroy_node()
-        rclpy.shutdown()
+        rclpy.try_shutdown()
 
 
 if __name__ == "__main__":

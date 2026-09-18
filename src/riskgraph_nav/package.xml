@@ -1,13 +1,21 @@
 <?xml version="1.0"?>
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
-  <name>riskgraph_explainer</name>
-  <version>0.1.2</version>
-  <description>Standalone explanation broadcaster for RiskGraph-Go2 route scores</description>
+  <name>riskgraph_nav</name>
+  <version>0.2.0</version>
+  <description>Live GO2 navigation integration for RiskGraph: anchored localization, preflight, trial runner, evidence bundle. Publishes no robot commands.</description>
   <maintainer email="yusuf.a.guenena@gmail.com">yusufdxb</maintainer>
   <license>MIT</license>
 
   <depend>rclpy</depend>
+  <depend>std_msgs</depend>
+  <depend>std_srvs</depend>
+  <depend>geometry_msgs</depend>
+  <depend>nav_msgs</depend>
+  <depend>nav2_msgs</depend>
+  <depend>lifecycle_msgs</depend>
+  <depend>action_msgs</depend>
+  <depend>tf2_ros</depend>
   <depend>riskgraph_msgs</depend>
   <depend>riskgraph_core</depend>
   <depend>riskgraph_memory</depend>

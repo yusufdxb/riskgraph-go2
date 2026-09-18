@@ -1,17 +1,21 @@
-# Default RiskGraph-Go2 parameters.
-# Loaded by both demo_offline.launch.py and integration.launch.py.
+# Parameters for the OFFLINE synthetic demo (demo_offline.launch.py) only.
+# The live trial is configured by riskgraph_live.launch.py, which computes the
+# database path and map identity from the experiment file.
 #
 # `store_path` MUST be the same string for `riskgraph_memory` and `riskgraph_planner`
 # (and `riskgraph_explainer` if running). They open the same SQLite file: the memory
 # node writes, the planner/explainer read. SQLite WAL mode (set automatically by
 # riskgraph_core.RiskStore) makes that safe.
 #
-# /tmp is launch-scoped enough for the demo and survives the short stack lifetime.
-# For Jetson production, override to a persistent NVMe path — see docs/hardware_integration.md.
+# The demo database is a throwaway test-class file under /tmp; a test-class
+# database can never be opened by a live-mode node (evidence class binding).
 
 riskgraph_memory:
   ros__parameters:
-    store_path: "/tmp/riskgraph_store.sqlite"
+    store_path: "/tmp/riskgraph_demo/demo.sqlite"
+    run_mode: "test"
+    map_id: "demo-offline"
+    publish_grid: false
     decay_half_life_s: 1800.0   # 30 min, older events fade
     # Absolute path to a segment-seed JSON/YAML file. Empty string disables
     # seeding (events without an emitter-stamped segment_id get stored unbound).
@@ -25,7 +29,8 @@ riskgraph_memory:
 
 riskgraph_planner:
   ros__parameters:
-    store_path: "/tmp/riskgraph_store.sqlite"
+    store_path: "/tmp/riskgraph_demo/demo.sqlite"
+    expected_map_id: "demo-offline"
     weight_geometry: 1.0
     weight_semantic: 1.0
     weight_risk: 4.0
@@ -33,7 +38,7 @@ riskgraph_planner:
 
 riskgraph_explainer:
   ros__parameters:
-    store_path: "/tmp/riskgraph_store.sqlite"
+    store_path: "/tmp/riskgraph_demo/demo.sqlite"
     input_topic: "/riskgraph/route_scores"
     output_topic: "/riskgraph/explanations"
 

@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Any, List
 
-from riskgraph_core.events import RiskEvent, RiskFactor, FactorCategory
+from riskgraph_core.events import FactorCategory, Provenance, RiskEvent, RiskFactor
 from riskgraph_core.segments import RouteSegment, Route
 
 
@@ -34,6 +34,9 @@ def core_event_from_msg(msg: Any) -> RiskEvent:
         # laundered into confidently-wrong spatial joins, so it is preserved.
         frame_id=str(msg.header.frame_id),
         segment_id=(str(msg.segment_id) if getattr(msg, "segment_id", "") else None),
+        provenance=Provenance.coerce(str(getattr(msg, "provenance", "") or "")),
+        source_frame_id=str(getattr(msg, "source_frame_id", "") or ""),
+        map_id=str(getattr(msg, "map_id", "") or ""),
     )
 
 

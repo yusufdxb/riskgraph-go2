@@ -11,6 +11,7 @@ from __future__ import annotations
 import sys
 
 import rclpy
+from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
 from geometry_msgs.msg import Point
@@ -18,7 +19,7 @@ from std_msgs.msg import Header
 
 from riskgraph_msgs.msg import RiskEvent as RiskEventMsg, RiskFactor as RiskFactorMsg
 
-from .pose_tagging import PoseTaggingMixin
+from .pose_tagging import PoseTaggingMixin, new_event_id, stamp_seconds
 
 try:
     from helix_msgs.msg import FaultEvent  # noqa: F401
@@ -50,15 +51,17 @@ class HelixAdapter(PoseTaggingMixin, Node):
         sev = _SEVERITY_MAP.get(int(msg.severity), 0.5)
         out = RiskEventMsg()
         out.header = Header()
-        # helix FaultEvent carries timestamp as float64 — synthesize stamp
+        # helix FaultEvent carries timestamp as float64 (synthesize stamp
         event_time_s = float(msg.timestamp)
         sec = int(event_time_s)
         nsec = int((event_time_s - sec) * 1e9)
         out.header.stamp.sec = sec
         out.header.stamp.nanosec = max(0, min(999_999_999, nsec))
-        out.event_id = ""
+        out.event_id = new_event_id()
+        out.provenance = "HARDWARE_DERIVED"
         out.position = Point()
-        self.stamp_pose(out, event_time_s)
+        # Pose at receipt on this node's clock (see safety_adapter).
+        self.stamp_pose(out, stamp_seconds(self.get_clock().now().to_msg()))
         f = RiskFactorMsg()
         f.category = "FAULT"
         f.severity = float(sev)
@@ -80,11 +83,11 @@ def main(args=None) -> None:
     node = HelixAdapter()
     try:
         rclpy.spin(node)
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, ExternalShutdownException):
         pass
     finally:
         node.destroy_node()
-        rclpy.shutdown()
+        rclpy.try_shutdown()
 
 
 if __name__ == "__main__":

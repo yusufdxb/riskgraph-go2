@@ -2,14 +2,14 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, "feat/**"]
   pull_request:
     branches: [main]
   workflow_dispatch:
 
 jobs:
   unit-tests:
-    name: Unit tests (pytest)
+    name: Unit tests (pytest, no ROS)
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -26,7 +26,48 @@ jobs:
           pip install -r requirements-ci.txt
 
       - name: Run unit suite
-        # The unit tests are pure-Python. ROS modules (rclpy, *_msgs) are
-        # stubbed in sys.modules by the tests, so no colcon/rclpy build is
-        # needed. conftest.py in each package puts the package on sys.path.
-        run: python -m pytest src/ -v
+        # Pure-Python: ROS modules are stubbed or imported lazily, so no
+        # colcon/rclpy build is needed here.
+        run: ./scripts/run_tests.sh -v
+
+  ros-integration:
+    name: ROS 2 Humble + Nav2 integration (real processes)
+    runs-on: ubuntu-22.04
+    container:
+      image: ros:humble-ros-base
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Install Nav2 and test deps
+        shell: bash
+        run: |
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            ros-humble-nav2-map-server ros-humble-nav2-planner ros-humble-nav2-navfn-planner \
+            ros-humble-nav2-controller ros-humble-nav2-regulated-pure-pursuit-controller \
+            ros-humble-nav2-velocity-smoother ros-humble-nav2-lifecycle-manager \
+            ros-humble-nav2-costmap-2d ros-humble-nav2-msgs ros-humble-rmw-cyclonedds-cpp \
+            ros-humble-tf2-ros-py python3-pytest python3-yaml
+
+      - name: Build
+        shell: bash
+        run: |
+          source /opt/ros/humble/setup.bash
+          colcon build --symlink-install --event-handlers console_direct-
+
+      - name: colcon test (package unit tests)
+        shell: bash
+        run: |
+          source /opt/ros/humble/setup.bash
+          source install/setup.bash
+          colcon test --packages-select riskgraph_core riskgraph_memory riskgraph_demo riskgraph_nav \
+            --event-handlers console_direct-
+          colcon test-result --verbose
+
+      - name: Integration tests (RiskGraph + localization + Nav2, no robot)
+        shell: bash
+        run: |
+          source /opt/ros/humble/setup.bash
+          source install/setup.bash
+          python3 -m pytest tests/integration -v -x

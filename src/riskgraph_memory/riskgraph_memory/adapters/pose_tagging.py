@@ -21,6 +21,8 @@ subscriber is compatible with either a best-effort or a reliable publisher.
 """
 from __future__ import annotations
 
+import uuid
+
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
 from nav_msgs.msg import Odometry
 
@@ -71,6 +73,7 @@ class PoseTaggingMixin:
         self._pose_cache = OdometryCache(max_age_s=max_age_s)
         self._unposed_events = 0
         self._posed_events = 0
+        self._robot_clock_skew_s = None
 
         if odom_topic:
             qos = QoSProfile(reliability=ReliabilityPolicy.BEST_EFFORT,
@@ -103,18 +106,27 @@ class PoseTaggingMixin:
         return self._posed_events
 
     def _on_odom(self, msg) -> None:
-        """Cache one odometry sample.
+        """Cache one odometry sample, timed by THIS node's clock at receipt.
 
-        Some Go2 firmware revisions publish odometry with an unset header
-        stamp. Rather than refuse those outright, fall back to the receive
-        time from the node clock: the sample is genuinely "now" to within one
-        callback, which is exactly what the age bound is measuring.
+        The robot's own header stamps are not usable for freshness: on the
+        lab GO2 they were measured months behind the payload clock. Comparing
+        them with event times from payload-side nodes put every event outside
+        the age bound, so every live event would have been stored unposed.
+        The receipt time is "now" to within one callback, which is exactly
+        what the age bound measures. The robot stamp is kept only to report
+        the skew.
         """
-        stamp_s = stamp_seconds(msg.header.stamp)
-        if stamp_s <= 0.0:
-            stamp_s = stamp_seconds(self.get_clock().now().to_msg())
+        receipt_s = stamp_seconds(self.get_clock().now().to_msg())
+        robot_s = stamp_seconds(msg.header.stamp)
+        if robot_s > 0.0:
+            self._robot_clock_skew_s = receipt_s - robot_s
         p = msg.pose.pose.position
-        self._pose_cache.update(p.x, p.y, p.z, msg.header.frame_id, stamp_s)
+        self._pose_cache.update(p.x, p.y, p.z, msg.header.frame_id, receipt_s)
+
+    @property
+    def robot_clock_skew_s(self):
+        """payload clock minus robot stamp on the last odometry sample (None if unset)."""
+        return getattr(self, "_robot_clock_skew_s", None)
 
     def stamp_pose(self, out, event_time_s: float) -> bool:
         """Stamp ``out.position`` / ``out.header.frame_id`` for an event.
@@ -141,7 +153,14 @@ class PoseTaggingMixin:
         return True
 
 
+def new_event_id() -> str:
+    """Emitter-assigned id: the memory node's duplicate check keys on it, so a
+    re-delivered message can never be stored twice."""
+    return str(uuid.uuid4())
+
+
 __all__ = [
+    "new_event_id",
     "DEFAULT_ODOM_TOPIC",
     "UNPOSED_WARN_EVERY",
     "PoseTaggingMixin",
