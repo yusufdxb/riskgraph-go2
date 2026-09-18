@@ -1,10 +1,11 @@
 # RiskGraph-Go2: live GO2 trial runbook
 
 This is the procedure for the first **moving** RiskGraph experiment on the
-Unitree GO2. Follow it top to bottom in the lab. Nothing in it is verified on
-the robot yet: status is **software validated / hardware experiment prepared /
-physical hardware behavior unverified** until a run of this procedure passes
-and its evidence bundle is reviewed.
+Unitree GO2. Follow it top to bottom in the lab. The stack has been brought up
+on the payload with the robot lying still (section 12); nothing that moves the
+robot is verified yet: status is **software validated / stack verified on the
+payload at rest / physical hardware behavior unverified** until a run of this
+procedure passes and its evidence bundle is reviewed.
 
 The claim under test:
 
@@ -306,5 +307,40 @@ Useful: `ros2 topic echo --once /riskgraph/localization/status`,
   clearance to the box; a visible mismatch is an abort.
 * **Physical stop latency and distance** through the HELIX chain are HELIX's
   stage-E measurements, not RiskGraph's.
-* **Nav2 on the payload** is not yet confirmed installed (section 2).
+* **Nav2 on the payload**: Nav2, slam_toolbox and pointcloud_to_laserscan are
+  installed on the payload Jetson and the workspace builds there offline
+  (section 12).
 * The lidar is not used for obstacles in this trial (section 1).
+
+## 12. Stationary check on the payload (2026-09-18)
+
+The robot was lying down and powered, with every sensor live. Nothing was
+allowed to reach the HELIX arbiter or the robot: the navigation side ran with
+`sink_prefix:=/rg_check` (below) and memory ran with `run_mode:=test` on a
+throwaway database. `/api/sport/request` kept its 9 robot-owned publishers
+throughout.
+
+```bash
+ros2 launch riskgraph_bringup riskgraph_live.launch.py run_mode:=test store_path:=/tmp/rg_check.sqlite
+ros2 launch riskgraph_bringup riskgraph_nav_live.launch.py sink_prefix:=/rg_check
+```
+
+`sink_prefix` moves every output of the navigation launch (`/cmd_vel_nav`,
+`/nav/cmd_vel`, `/tf`, `/tf_static`) under the prefix. It is empty by default,
+which keeps the real topics.
+
+| Check | Result |
+|---|---|
+| Workspace builds on the payload, offline | PASS, 7 packages |
+| Memory stack starts on the payload | FAIL as shipped at `8d666bf`: tf2_ros 0.25.20 on the payload rejects `TransformListener(buffer, None)`. Fixed in `f3177d3`, after which memory, planner and explainer report ready (schema v2) |
+| Nav2 lifecycle with outputs sunk | PASS, all managed nodes active about 3 s after launch; only the prefixed velocity topics exist |
+| Anchoring and TF on live `/utlidar/robot_odom` | PASS, anchored on the first stationary window; `map`->`base_link` resolves; TF at 41.6 Hz |
+| "Transform data too old" in the controller (Humble MessageFilter stall) | 0 occurrences over about 60 s at rest |
+| Costmaps populate | PASS, global 160x92 at 0.05 m with 10432 non-zero cells; local 80x80 in `odom`, 13 updates in 8 s |
+| One RiskEvent reaches the planner | PASS, risk grid went from 0 to 804 non-zero cells (max 65, never lethal) 0.218 s after publish; global costmap from 10432 to 11131 non-zero cells |
+| Tactile adapter pose tagging on live odometry | PASS, 20/20 events posed in `odom`, stamp age 1 to 2 ms |
+| Cost on the payload (8 cores) | 27.3% of one core for the whole stack (localization 14.4%, controller 2.8%, each other node 2.1% or less), about 326 MB resident |
+
+Not covered: anything that moves the robot (sections 5 to 8), anchor drift
+over a walked route, and a long soak for the MessageFilter stall with the
+robot moving.

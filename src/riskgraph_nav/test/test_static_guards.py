@@ -47,9 +47,14 @@ def test_no_riskgraph_code_mentions_sport_api_ids_as_commands():
 
 def test_controller_output_is_remapped_into_the_arbiter_source():
     launch = (SRC / "riskgraph_bringup" / "launch" / "riskgraph_nav_live.launch.py").read_text()
-    assert '("cmd_vel", "/cmd_vel_nav")' in launch
-    assert '("cmd_vel_smoothed", "/nav/cmd_vel")' in launch
-    assert '"/cmd_vel")' not in launch.replace('"/cmd_vel_nav")', "")
+    # Topic names are built from sink_prefix, whose default "" gives exactly
+    # /cmd_vel_nav -> /nav/cmd_vel (a non-empty prefix is the stationary check).
+    assert 'DeclareLaunchArgument("sink_prefix", default_value="")' in launch
+    assert 'cmd_vel_nav = f"{prefix}/cmd_vel_nav"' in launch
+    assert 'nav_cmd_vel = f"{prefix}/nav/cmd_vel"' in launch
+    assert '("cmd_vel", cmd_vel_nav)' in launch
+    assert '("cmd_vel_smoothed", nav_cmd_vel)' in launch
+    assert '/cmd_vel")' not in launch.replace('/cmd_vel_nav")', "").replace('/nav/cmd_vel")', "")
 
 
 def test_nav2_velocity_limits_inside_sink_limits():
