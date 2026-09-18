@@ -1,0 +1,49 @@
+# Canonical RiskGraph live experiment: one course, two corridors.
+#
+# Lay this out on the lab floor BEFORE the session (tape + one box):
+#
+#   * marker A at (0, 0), robot facing +x. The map frame is DEFINED by this
+#     marker: the robot is anchored here when the navigation stack starts.
+#   * marker B at (5, 0).
+#   * the obstacle: a box covering x 2.0..3.0, y -0.65..+0.35 (1.0 m x 1.0 m,
+#     centre (2.5, -0.15)). It sits slightly to the right of the A-B line so
+#     the LEFT (+y) corridor is the shorter one: the baseline route.
+#   * the cleared area: x -1.0..6.0, y -1.8..+1.8. Nothing else inside it.
+#
+# +y is the robot's LEFT when it stands on A facing B.
+#
+# If the room cannot fit this, edit the numbers, then regenerate the map:
+#     ros2 run riskgraph_nav riskgraph_generate_course_map --experiment <this file>
+# The map id is a hash of the generated map plus the marker pose, so any
+# change produces a new map id and therefore a new database file. Never hand
+# edit the .pgm.
+
+experiment:
+  name: riskgraph_two_corridor_v1
+  frame_id: map
+  map:
+    yaml: ../../maps/two_corridor.yaml
+  resolution: 0.05
+  border_m: 0.5            # occupied margin drawn around the cleared area
+  area: {x_min: -1.0, x_max: 6.0, y_min: -1.8, y_max: 1.8}
+  obstacle: {cx: 2.5, cy: -0.15, size_x: 1.0, size_y: 1.0}
+  start: {marker: A, x: 0.0, y: 0.0, yaw: 0.0}
+  goal: {marker: B, x: 5.0, y: 0.0, yaw: 0.0}
+  tolerances:
+    start_xy_m: 0.30       # robot must be this close to A before a trial starts
+    start_yaw_rad: 0.35    # ~20 deg: the controller cannot turn on the spot
+    goal_xy_m: 0.35        # must match the Nav2 goal checker
+  injection:
+    capture_radius_m: 0.35 # a captured pose must be this close to the capture point
+    severity: 1.0
+  risk_field:
+    radius_m: 0.8          # an event raises cost within 0.8 m, never further
+    value_per_unit_risk: 90
+    max_cell_value: 90     # 90 of 100: high cost, never lethal
+    decay_half_life_s: 0.0 # decay OFF for the trial: C, D and E must see one field
+  acceptance:
+    min_route_separation_m: 0.30
+    max_cross_track_m: 0.75   # abort if the robot leaves the approved path by more
+    max_speed_mps: 0.35       # abort above this (HELIX sink caps commands at 0.25)
+    stationary_speed_mps: 0.05
+    max_execution_s: 120.0

@@ -1,0 +1,12 @@
+# Generated from two_corridor.yaml by riskgraph_generate_course_map.
+# Regenerate instead of editing: the map id is a hash of this content.
+free_thresh: 0.25
+image: two_corridor.pgm
+mode: trinary
+negate: 0
+occupied_thresh: 0.65
+origin:
+- -1.5
+- -2.3
+- 0.0
+resolution: 0.05
