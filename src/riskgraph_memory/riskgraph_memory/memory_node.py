@@ -147,6 +147,7 @@ class RiskMemoryNode(Node):
         # -- TF --
         self._tf_buffer = None
         self._tf_listener = None
+        self._tf_node = None
         try:
             import tf2_ros
             self._tf_buffer = tf2_ros.Buffer()
@@ -155,9 +156,12 @@ class RiskMemoryNode(Node):
             # spin_thread adds the node it is GIVEN to its own executor; giving
             # it THIS node would be undone the moment main() adds this node to
             # its executor, and the lookup would then wait on callbacks it is
-            # itself blocking. node=None makes it create a dedicated node.
+            # itself blocking, so it gets a dedicated node. That node is created
+            # here: node=None only works on tf2_ros >= 0.25.23, and the GO2
+            # payload ships 0.25.20, where it crashes at startup.
+            self._tf_node = rclpy.create_node(f"{self.get_name()}_tf_listener")
             self._tf_listener = tf2_ros.TransformListener(
-                self._tf_buffer, None, spin_thread=True)
+                self._tf_buffer, self._tf_node, spin_thread=True)
         except ImportError:
             self.get_logger().error("tf2_ros unavailable: every non-map event will be quarantined")
 
@@ -398,6 +402,8 @@ class RiskMemoryNode(Node):
                 self._tf_listener.dedicated_listener_thread.join(timeout=2.0)
             except Exception:
                 pass
+        if self._tf_node is not None:
+            self._tf_node.destroy_node()
         return super().destroy_node()
 
 

@@ -99,7 +99,8 @@ class Ros:
         self.CP = ComputePathToPose
         self.RiskEvent = RiskEvent
         self.buf = tf2_ros.Buffer()
-        self.tl = tf2_ros.TransformListener(self.buf, None, spin_thread=True)
+        self.tl_node = rclpy.create_node("riskgraph_live_test_tf_listener")
+        self.tl = tf2_ros.TransformListener(self.buf, self.tl_node, spin_thread=True)
         self.ex = MultiThreadedExecutor()
         self.ex.add_node(self.n)
         threading.Thread(target=self.ex.spin, daemon=True).start()

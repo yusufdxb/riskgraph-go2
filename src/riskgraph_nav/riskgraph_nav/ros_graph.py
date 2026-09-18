@@ -36,6 +36,7 @@ class GraphProbe:
         self._thread.start()
         self._tf_buffer = None
         self._tf_listener = None
+        self._tf_node = None
 
     def _spin(self) -> None:
         try:
@@ -50,6 +51,8 @@ class GraphProbe:
                 self._tf_listener.dedicated_listener_thread.join(timeout=2.0)
             except Exception:
                 pass
+        if self._tf_node is not None:
+            self._tf_node.destroy_node()
         self._ex.shutdown(timeout_sec=1.0)
         self._thread.join(timeout=2.0)
         self.node.destroy_node()
@@ -175,7 +178,11 @@ class GraphProbe:
         if self._tf_buffer is None:
             import tf2_ros
             self._tf_buffer = tf2_ros.Buffer()
-            self._tf_listener = tf2_ros.TransformListener(self._tf_buffer, None, spin_thread=True)
+            # Dedicated node created explicitly: node=None needs tf2_ros >= 0.25.23
+            # and crashes on the GO2 payload's 0.25.20.
+            self._tf_node = rclpy.create_node(f"{self.node.get_name()}_tf_listener")
+            self._tf_listener = tf2_ros.TransformListener(
+                self._tf_buffer, self._tf_node, spin_thread=True)
         return self._tf_buffer
 
     def lookup(self, target: str, source: str, timeout_s: float = 0.5):
