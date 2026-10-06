@@ -224,6 +224,18 @@ def test_all_nodes_share_one_absolute_database(stack):
     assert expected in r.stdout
 
 
+def test_node_names_are_unique(stack):
+    # launch's name= is a process-wide __node remap: the memory node's dedicated TF
+    # listener must not inherit it and become a second /riskgraph_memory (preflight P12).
+    ros = stack["ros"]
+
+    def names():
+        return [ns.rstrip("/") + "/" + n for n, ns in ros.n.get_node_names_and_namespaces()]
+    assert ros.wait(lambda: "/riskgraph_memory_tf_listener" in names(), 10), names()
+    seen = names()
+    assert sorted({x for x in seen if seen.count(x) > 1}) == []
+
+
 def test_odom_event_is_transformed_into_map(stack):
     ros = stack["ros"]
     # 1 m straight ahead of the robot, expressed in the ODOM frame.

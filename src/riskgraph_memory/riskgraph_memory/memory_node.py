@@ -158,8 +158,11 @@ class RiskMemoryNode(Node):
             # its executor, and the lookup would then wait on callbacks it is
             # itself blocking, so it gets a dedicated node. That node is created
             # here: node=None only works on tf2_ros >= 0.25.23, and the GO2
-            # payload ships 0.25.20, where it crashes at startup.
-            self._tf_node = rclpy.create_node(f"{self.get_name()}_tf_listener")
+            # payload ships 0.25.20, where it crashes at startup. It ignores the
+            # process-wide args: launch's name= is a global __node remap that
+            # would otherwise rename it to a second /riskgraph_memory.
+            self._tf_node = rclpy.create_node(f"{self.get_name()}_tf_listener",
+                                              use_global_arguments=False)
             self._tf_listener = tf2_ros.TransformListener(
                 self._tf_buffer, self._tf_node, spin_thread=True)
         except ImportError:

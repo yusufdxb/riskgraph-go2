@@ -179,8 +179,10 @@ class GraphProbe:
             import tf2_ros
             self._tf_buffer = tf2_ros.Buffer()
             # Dedicated node created explicitly: node=None needs tf2_ros >= 0.25.23
-            # and crashes on the GO2 payload's 0.25.20.
-            self._tf_node = rclpy.create_node(f"{self.node.get_name()}_tf_listener")
+            # and crashes on the GO2 payload's 0.25.20. Global args are ignored so a
+            # __node remap on this process cannot give it the probe's own name.
+            self._tf_node = rclpy.create_node(f"{self.node.get_name()}_tf_listener",
+                                              use_global_arguments=False)
             self._tf_listener = tf2_ros.TransformListener(
                 self._tf_buffer, self._tf_node, spin_thread=True)
         return self._tf_buffer
