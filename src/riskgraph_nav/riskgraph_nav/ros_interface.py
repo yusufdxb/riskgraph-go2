@@ -24,6 +24,10 @@ from riskgraph_core.risk_field import RiskField
 from riskgraph_msgs.msg import RiskEvent, RiskFactor
 
 from .ros_graph import LATCHED, SENSOR, GraphProbe
+from .sport_sink_core import API_MOVE, TRACE_MAX_AGE_S as SINK_TRACE_MAX_AGE_S
+from .sport_sink_core import TRACE_TOPIC as SINK_TRACE, NODE_NAME as _SINK_NAME
+
+SINK = "/" + _SINK_NAME
 
 _STATUS = {GoalStatus.STATUS_SUCCEEDED: "SUCCEEDED", GoalStatus.STATUS_ABORTED: "ABORTED",
            GoalStatus.STATUS_CANCELED: "CANCELED", GoalStatus.STATUS_UNKNOWN: "UNKNOWN"}
@@ -48,22 +52,19 @@ class TrialRos:
         self.plan_msgs = 0
         self.stop_requested = False
         self._last_nonzero_cmd = None
-        self._arb = None
-        self._arb_t = 0.0
-        self._arb_counts = {"ticks": 0, "hold_ticks": 0, "nonzero_ticks": 0, "nonzero_while_hold": 0}
+        self._sink = None
+        self._sink_t = 0.0
+        self._sink_counts = {"traces": 0, "moves": 0, "stops": 0, "rejects": 0, "not_armed": 0,
+                             "deadman": 0}
         n.create_subscription(String, "/riskgraph/status", self._on_rg, LATCHED)
         n.create_subscription(String, "/riskgraph/localization/status", self._on_loc, LATCHED)
         n.create_subscription(OccupancyGrid, "/riskgraph/risk_costmap", self._set("risk_grid"), LATCHED)
         n.create_subscription(OccupancyGrid, "/map", self._set("map_grid"), LATCHED)
         n.create_subscription(OccupancyGrid, "/global_costmap/costmap", self._set("global_grid"), LATCHED)
         n.create_subscription(Path, "/plan", self._on_plan, 10)
-        n.create_subscription(Twist, "/cmd_vel", self._on_cmd, SENSOR)
-        try:
-            from helix_msgs.msg import ArbiterStatus
-            n.create_subscription(ArbiterStatus, "/helix/arbiter/status", self._on_arb, SENSOR)
-            self.have_arbiter_type = True
-        except ImportError:
-            self.have_arbiter_type = False
+        # The sink's only input: a nonzero command here after a cancel is a persisting command.
+        n.create_subscription(Twist, "/nav/cmd_vel", self._on_cmd, SENSOR)
+        n.create_subscription(String, SINK_TRACE, self._on_sink, SENSOR)
         rel = QoSProfile(reliability=ReliabilityPolicy.RELIABLE, history=HistoryPolicy.KEEP_LAST, depth=10)
         self._event_pub = n.create_publisher(RiskEvent, "/riskgraph/risk_events", rel)
         self._marker_pub = n.create_publisher(String, "/riskgraph/trial/markers", rel)
@@ -104,18 +105,26 @@ class TrialRos:
         if abs(m.linear.x) > 1e-6 or abs(m.linear.y) > 1e-6 or abs(m.angular.z) > 1e-6:
             self._last_nonzero_cmd = time.time()
 
-    def _on_arb(self, m) -> None:
-        self._arb = m
-        self._arb_t = time.time()
-        c = self._arb_counts
-        c["ticks"] += 1
-        nz = m.out_linear_x != 0.0 or m.out_linear_y != 0.0 or m.out_angular_z != 0.0
-        if m.hold_active:
-            c["hold_ticks"] += 1
-            if nz:
-                c["nonzero_while_hold"] += 1
-        if nz:
-            c["nonzero_ticks"] += 1
+    def _on_sink(self, m: String) -> None:
+        try:
+            d = json.loads(m.data)
+        except ValueError:
+            return
+        self._sink = d
+        self._sink_t = time.time()
+        c = self._sink_counts
+        c["traces"] += 1
+        reason = str(d.get("reason"))
+        if d.get("api_id") == API_MOVE:
+            c["moves"] += 1
+        else:
+            c["stops"] += 1
+        if reason.startswith("REJECT"):
+            c["rejects"] += 1
+        elif reason == "NOT_ARMED":
+            c["not_armed"] += 1
+        elif reason == "DEADMAN":
+            c["deadman"] += 1
 
     def request_stop(self) -> None:
         self.stop_requested = True
@@ -304,7 +313,7 @@ class TrialRos:
                 ("/map_server", "/planner_server", "/controller_server", "/velocity_smoother")}
 
     def sink_params(self) -> Optional[dict]:
-        return self.probe.params("/helix_go2_sport_sink", ["mode", "max_vx", "max_wz"])
+        return self.probe.params(SINK, ["mode", "max_vx", "max_wz", "input_timeout_sec"])
 
     # -- grids ---------------------------------------------------------------------------------
 
@@ -383,20 +392,20 @@ class TrialRos:
 
     # -- monitoring -----------------------------------------------------------------------------
 
-    def arbiter_summary(self) -> Dict[str, object]:
-        m = self._arb
-        if m is None:
-            return {"seen": False, "type_available": self.have_arbiter_type}
-        return {"seen": True, "age_s": round(time.time() - self._arb_t, 3), "reason": m.reason,
-                "hold_active": bool(m.hold_active), "selected": m.selected_source,
-                "sink_subscribers": int(m.sink_subscribers)}
+    def sink_summary(self) -> Dict[str, object]:
+        d = self._sink
+        if d is None:
+            return {"seen": False}
+        return {"seen": True, "age_s": round(time.time() - self._sink_t, 3), "mode": d.get("mode"),
+                "api_id": d.get("api_id"), "reason": d.get("reason"),
+                "sent_to_robot": d.get("sent_to_robot")}
 
-    def arbiter_reset_counters(self) -> None:
-        for k in self._arb_counts:
-            self._arb_counts[k] = 0
+    def sink_reset_counters(self) -> None:
+        for k in self._sink_counts:
+            self._sink_counts[k] = 0
 
-    def arbiter_counters(self) -> Dict[str, int]:
-        return dict(self._arb_counts)
+    def sink_counters(self) -> Dict[str, int]:
+        return dict(self._sink_counts)
 
     def motion_sources(self) -> Dict[str, List[str]]:
         p = self.probe
@@ -413,11 +422,11 @@ class TrialRos:
             out.append(f"localization not valid/fresh ({loc.get('state')})")
         if not self.stationary():
             out.append("robot is moving")
-        a = self.arbiter_summary()
-        if not a.get("seen") or a.get("age_s", 99) > 0.5:
-            out.append(f"motion arbiter status not fresh: {a}")
-        elif a.get("hold_active"):
-            out.append(f"HELIX hold active ({a.get('reason')})")
+        a = self.sink_summary()
+        if not a.get("seen") or a.get("age_s", 99) > SINK_TRACE_MAX_AGE_S:
+            out.append(f"sport sink trace not fresh: {a}")
+        elif a.get("mode") != "armed":
+            out.append(f"sport sink not armed: {a}")
         st = self.rg_status or {}
         if st.get("health") or st.get("map_id") != self.r.map_id:
             out.append(f"RiskGraph unhealthy: {st.get('health')} map={st.get('map_id')}")
@@ -432,11 +441,11 @@ class TrialRos:
             return f"LOCALIZATION_INVALID: {loc.get('state')} (jumps={loc.get('odom_jumps')})"
         if (loc.get("odom_age_s") or 0) > 0.5:
             return f"ROBOT_STATE_LOST: odometry age {loc.get('odom_age_s')} s"
-        a = self.arbiter_summary()
-        if not a.get("seen") or a.get("age_s", 99) > 0.5:
-            return f"ARBITER_LOST: {a}"
-        if a.get("hold_active"):
-            return f"HELIX_HOLD: {a.get('reason')} (trial confounded; the arbiter is forcing zero)"
+        a = self.sink_summary()
+        if not a.get("seen") or a.get("age_s", 99) > SINK_TRACE_MAX_AGE_S:
+            return f"SINK_LOST: {a}"
+        if str(a.get("reason")).startswith("REJECT"):
+            return f"SINK_REJECT: {a.get('reason')} (a command outside the sink limits reached it)"
         st = self.rg_status or {}
         if now - self.rg_status_t > 3.0:
             return "RISKGRAPH_STATUS_STALE: no /riskgraph/status for > 3 s (process down?)"

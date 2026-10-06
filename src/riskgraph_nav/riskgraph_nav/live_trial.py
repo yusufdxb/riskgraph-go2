@@ -1,20 +1,21 @@
 """The canonical live RiskGraph GO2 experiment, end to end, with evidence.
 
     ros2 run riskgraph_nav riskgraph_live_trial --mode live \\
-        --helix-session ~/helix_hw/<date>_motion
+        --sink-session ~/riskgraph_sink/<date>
 
 Runs Trials A to E of docs/HW_VERIFICATION.md against the navigation stack
-the operator has already started (riskgraph_nav_live.launch.py), the HELIX
-closed loop with its motion arbiter, and the HELIX sport sink in ``armed``
-mode. This program launches (and, for Trial D, restarts) RiskGraph itself.
+the operator has already started (riskgraph_nav_live.launch.py) and the
+RiskGraph sport sink in ``armed`` mode, after the sink stages S0 to S2 passed
+on this robot. This program launches (and, for Trial D, restarts) RiskGraph
+itself.
 
 What this program never does:
 
 * publish a velocity, a twist, or any robot command. Motion only ever
   results from sending ONE operator-approved path to Nav2's controller
   (``/follow_path``), whose output reaches the robot only through
-  velocity_smoother -> /nav/cmd_vel -> helix_arbiter -> /cmd_vel ->
-  helix_go2_sport_sink.
+  velocity_smoother -> /nav/cmd_vel -> riskgraph_sport_sink ->
+  /api/sport/request.
 * send a goal without the typed arming phrase ``ARM LIVE GO2 RISKGRAPH TRIAL``
   (live mode refuses ``--auto-confirm``).
 * keep going after an abort condition: it cancels the goal, verifies the
@@ -38,6 +39,10 @@ import time
 import traceback
 import uuid
 from typing import Dict, List, Optional, Tuple
+
+from .sport_sink_core import NODE_NAME as _SINK_NAME
+
+SINK = "/" + _SINK_NAME
 
 ARM_PHRASE = "ARM LIVE GO2 RISKGRAPH TRIAL"
 INJECT_PHRASE = "INJECT RISK"
@@ -182,7 +187,7 @@ class Runner:
         self.rg_proc = None
         gone = self.ros.wait_until(lambda: not [n for n in self.ros.probe.nodes()
                                                 if n.startswith("/riskgraph_") and
-                                                n != "/riskgraph_localization" and
+                                                n not in ("/riskgraph_localization", SINK) and
                                                 not n.startswith("/riskgraph_live_trial")],
                                    timeout=10.0)
         self.log(f"RiskGraph stopped via {how}, launch exit code {rc}, nodes gone={gone}")
@@ -230,7 +235,7 @@ class Runner:
         self.save(f"graph/{tag}_graph.json", self.ros.probe.snapshot())
         for node in ("/riskgraph_memory", "/riskgraph_planner", "/riskgraph_localization",
                      "/planner_server", "/controller_server", "/velocity_smoother",
-                     "/helix_arbiter", "/helix_go2_sport_sink", "/global_costmap/global_costmap"):
+                     SINK, "/global_costmap/global_costmap"):
             if node in self.ros.probe.nodes():
                 r = subprocess.run(["ros2", "param", "dump", node], capture_output=True, text=True,
                                    timeout=20)
@@ -333,7 +338,7 @@ class Runner:
     def arming_screen(self, label: str, plan: dict) -> None:
         st = self.ros.rg_status or {}
         field = self.ros.current_field()
-        arb = self.ros.arbiter_summary()
+        sink = self.ros.sink_summary()
         affecting = plan["risk_metrics"]["contributing_events"] if plan.get("risk_metrics") else []
         entries = []
         for b in field.bumps:
@@ -348,7 +353,7 @@ class Runner:
             f"route risk:     accumulated {plan['risk_metrics']['accumulated_risk']:.3f}, "
             f"max {plan['risk_metrics']['max_risk']:.3f}",
             f"risk entries ({len(field.bumps)}):", *(entries or ["  none"]),
-            f"motion path:    /nav/cmd_vel <- velocity_smoother; arbiter: {arb}",
+            f"motion path:    velocity_smoother -> /nav/cmd_vel -> sink; last: {sink}",
             f"sport sink:     {self.ros.sink_params()}",
             f"Nav2 state:     {self.ros.nav_states()}",
             f"RiskGraph DB:   {st.get('db_path')} (schema v{st.get('schema_version')}, "
@@ -386,7 +391,7 @@ class Runner:
         max_speed = 0.0
         abort = None
         progress = []
-        self.ros.arbiter_reset_counters()
+        self.ros.sink_reset_counters()
         self.ros.marker({"event": "execute_start", "trial": label})
         t0 = now_s()
         gh = self.ros.send_follow_path(plan["points"])
@@ -464,7 +469,7 @@ class Runner:
             "localization_jumps_delta": (loc1.get("odom_jumps") or 0) - (loc0.get("odom_jumps") or 0),
             "localization_gaps_delta": (loc1.get("odom_gaps") or 0) - (loc0.get("odom_gaps") or 0),
             "executed_risk_metrics": field.path_metrics(pts) if len(pts) > 1 else None,
-            "arbiter": self.ros.arbiter_counters(), "post": post,
+            "sink": self.ros.sink_counters(), "post": post,
             "final_pose": samples[-1] if samples else None,
         }
         self.log(f"{label}: result={result} abort={abort} time={exec_time:.1f}s "
@@ -829,7 +834,7 @@ class Runner:
                                                     "ROS_LOCALHOST_ONLY", "CYCLONEDDS_URI")},
             "map_id": self.map_id, "db_path": self.store_path, "experiment": self.exp.path,
             "map_yaml": self.exp.map_yaml, "run_dir": self.run_dir,
-            "helix_session": self.a.helix_session,
+            "sink_session": self.a.sink_session,
         }
         self.save("manifest.json", self.manifest)
 

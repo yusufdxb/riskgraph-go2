@@ -26,7 +26,7 @@ physical hardware behavior unverified.**
 | Localization | odometry rate / age / stale; frame and non-finite rejection; jump latch (distance and yaw); stationary detection; anchor puts the robot on the marker |
 | Preflight | every blocking condition (P01..P38) produces NO-GO on synthetic facts; rehearsal relaxations |
 | Report | all 14 criteria; wrong executed corridor fails; missing bag fails; `hardware_pass` impossible for rehearsal or without operator attestation |
-| Static guards | no RiskGraph source creates a Twist / cmd_vel / sport-request publisher; Nav2 velocity limits strictly inside the HELIX sink limits; no bt_navigator / recovery behaviors; risk layer non-lethal and not in the local costmap |
+| Static guards | only the sport sink creates a sport-request publisher and only the sink stage runner a Twist publisher; sport API ids only as constants in the sink core, 1001 nowhere; Nav2 velocity limits strictly inside the sport sink limits; no bt_navigator / recovery behaviors; risk layer non-lethal and not in the local costmap |
 
 ### ROS 2 integration tests (real processes, real Nav2, no robot)
 
@@ -50,11 +50,11 @@ the start marker. Asserted:
 
 ### Full rehearsal of the live procedure
 
-`scripts/rehearse_live_trial.sh <helix_rehearsal_session>` runs the lab
-procedure with `riskgraph_rehearsal_go2` in place of the robot and the real
-motion chain in software (Nav2 controller -> velocity_smoother ->
-`/nav/cmd_vel` -> helix_arbiter -> `/cmd_vel` -> helix_go2_sport_sink armed
--> `unitree_api` Request -> rehearsal robot). Results of the rehearsal run
+`scripts/rehearse_live_trial.sh` runs the lab procedure with
+`riskgraph_rehearsal_go2` in place of the robot: sink stages S0-S2, then the
+real motion chain in software (Nav2 controller -> velocity_smoother ->
+`/nav/cmd_vel` -> riskgraph_sport_sink armed -> `unitree_api` Request ->
+rehearsal robot). Results of the rehearsal run
 are recorded in the CHANGELOG entry for the version that ran them. Rehearsal
 evidence is labelled REHEARSAL and can never set `hardware_pass`.
 
@@ -74,7 +74,7 @@ evidence is labelled REHEARSAL and can never set `hardware_pass`.
   course (drift, jumps, the robot being walked back by hand).
 * That the mcf gait follows Nav2's commands (<= 0.20 m/s with gentle yaw)
   round the box; the GO2 has only been measured at 0.15 m/s straight.
-* That HELIX's arbiter + sink move and stop this robot (HELIX stages D/E).
+* That the RiskGraph sport sink moves and stops this robot (sink stages S1/S2).
 * That Nav2 is installed on the payload and runs there at the configured rates.
 * Planner / controller latency and CPU on the Jetson under the full stack.
 * Live adapter wire formats (`go2_msgs`, `helix_msgs`, slip flag): the

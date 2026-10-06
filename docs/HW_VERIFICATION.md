@@ -34,9 +34,7 @@ flowchart LR
   RUN -- "ComputePathToPose" --> GC
   RUN -- "FollowPath (the approved path only)" --> CTRL[controller_server RPP]
   CTRL -- "/cmd_vel_nav" --> VS[velocity_smoother]
-  VS -- "/nav/cmd_vel" --> ARB[helix_arbiter]
-  HOLD["/helix/hold (helix_recovery)"] --> ARB
-  ARB -- "/cmd_vel" --> SINK[helix_go2_sport_sink armed]
+  VS -- "/nav/cmd_vel" --> SINK[riskgraph_sport_sink armed]
   SINK -- "unitree_api Request<br/>Move 1008 / StopMove 1003" --> SPORT["/api/sport/request"]
   SPORT --> GO2[GO2]
 ```
@@ -52,18 +50,24 @@ flowchart LR
 | `/riskgraph/status` | std_msgs/String (JSON) | riskgraph_memory |
 | `/compute_path_to_pose` | nav2_msgs/action/ComputePathToPose | runner -> planner_server |
 | `/follow_path` | nav2_msgs/action/FollowPath | runner -> controller_server |
-| `/cmd_vel_nav` -> `/nav/cmd_vel` | geometry_msgs/Twist | controller_server -> velocity_smoother -> helix_arbiter |
-| `/cmd_vel` | geometry_msgs/Twist | helix_arbiter (sole publisher) -> helix_go2_sport_sink |
-| `/api/sport/request` | unitree_api/msg/Request | helix_go2_sport_sink -> GO2 |
+| `/cmd_vel_nav` -> `/nav/cmd_vel` | geometry_msgs/Twist | controller_server -> velocity_smoother -> riskgraph_sport_sink |
+| `/api/sport/request` | unitree_api/msg/Request | riskgraph_sport_sink -> GO2 |
+| `/riskgraph/sink/trace` | std_msgs/String (JSON) | riskgraph_sport_sink: every decision, at least 2 Hz |
 
-**RiskGraph never publishes a velocity or a sport command.** The only motion
-authority is the HELIX arbiter + sport sink (HELIX repo,
-`docs/MOTION_ARBITRATION.md`). The preflight fails if any RiskGraph process
-publishes a Twist or a `unitree_api` Request, if `/cmd_vel` has any publisher
-other than `helix_arbiter`, if `/nav/cmd_vel` has any publisher other than
-`velocity_smoother`, or if `/api/sport/request` gains a publisher outside the
-HELIX stage-A baseline. A static test in `riskgraph_nav/test` also fails the
-build if RiskGraph source creates such a publisher.
+**One motion exit: `riskgraph_sport_sink`.** It is the only node that
+publishes sport requests, and only two kinds: Move (1008) within its limits
+(0.25 m/s, 0.20 m/s, 0.50 rad/s; over-limit is rejected with StopMove, never
+clamped) and StopMove (1003): on a zero command, on a non-finite or
+over-limit command, when not armed, and when its input goes silent for
+0.25 s (DEADMAN). 1001 on that topic is Damp and is impossible by
+construction. The mode (`dry_run`, `stop_only`, `armed`) is fixed at startup;
+on SIGINT/SIGTERM it sends a StopMove burst. Static tests fail the build if
+any other RiskGraph source publishes a sport request or a velocity (the sink
+stage runner, which feeds the sink bounded test commands, is the one velocity
+exception) or holds a sport API id as a value. The preflight fails if
+`/cmd_vel` has any publisher, another sport sink is running, `/nav/cmd_vel`
+has any publisher other than `velocity_smoother`, or `/api/sport/request`
+gains a publisher outside the sink stage S0 baseline.
 
 ### Why these design choices
 
@@ -98,15 +102,10 @@ The lab network has no internet (field notes section 7). Stage everything.
    source /opt/ros/humble/setup.bash && colcon build --symlink-install
    ./scripts/run_tests.sh                                            # all pass
    source install/setup.bash && python3 -m pytest tests/integration  # all pass
-   ./scripts/rehearse_live_trial.sh <helix_rehearsal_session>        # RESULT: COMPLETED, machine checks PASS
+   ./scripts/rehearse_live_trial.sh                                  # sink stages S0-S2 PASS, then RESULT: COMPLETED, machine checks PASS
    ```
-   (`<helix_rehearsal_session>` comes from HELIX `scripts/hw_rehearsal.sh <dir>`. Run that
-   with `RMW_IMPLEMENTATION=rmw_cyclonedds_cpp` and
-   `CYCLONEDDS_URI=file://$HOME/Projects/personal/riskgraph-go2/tests/integration/cyclonedds_loopback.xml`: on the default
-   Fast DDS a lifecycle reply to the launch is lost, `helix_recovery_node` stays
-   inactive, and stage A fails C2/C11/C12.)
 2. Copy this repo at that SHA to the payload and build it there, next to the
-   HELIX workspace and the unitree_ros2 workspace (`unitree_api`, `unitree_go`).
+   unitree_ros2 workspace (`unitree_api`, `unitree_go`).
 3. Confirm Nav2 is still installed **on the payload** (it was on 2026-09-18, section 12;
    re-check if the payload image changed):
    ```bash
@@ -143,7 +142,6 @@ beside the robot, both outside the corridors. The lab e-stop within reach.
 ssh unitree@<payload>                      # then: tmux new -s rg
 source /opt/ros/humble/setup.bash
 source <UNITREE_WS>/install/setup.bash     # unitree_api, unitree_go
-source <HELIX>/install/setup.bash
 source ~/riskgraph-go2/install/setup.bash
 export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
 grep -o 'NetworkInterface name="[^"]*"' "${CYCLONEDDS_URI#file://}"   # must be enP8p1s0
@@ -155,21 +153,39 @@ ros2 topic hz /utlidar/robot_odom          # ~150 Hz, or STOP (topic presence is
 
 ## 5. Launch order
 
-**0. HELIX motion path first.** Run HELIX `docs/HW_MOTION_TEST.md` stages A-F
-on this robot today (it creates the session dir with `sport_baseline.json` and
-stage D/E evidence). RiskGraph's preflight refuses to go without stage D and E
-PASS, non-rehearsal. Keep that session dir path: `$HSESSION`.
+**0. Sink stages first (the stop proof).** These prove, on this robot today,
+that the sink stops the GO2. They replace any external motion stack. Nav2
+must NOT be running (the stage runner must be the only `/nav/cmd_vel`
+publisher). The repo must be clean: the evidence records the SHA, and the
+live preflight only accepts stage evidence from the SHA it runs at.
 
-Terminals (all on the payload, environment from section 4):
+Stand the robot **with the remote** (stand lock, then Start; never through the
+API; only mcf), 2 m clear in front, spotter with the remote, release the sticks.
 
 ```bash
-# T1: HELIX closed loop + motion arbiter (recovery can only hold, never move)
-ros2 launch helix_bringup helix_closedloop.launch.py auto_activate_recovery:=true recovery_enabled:=true
-
-# T2: sport sink, ARMED (the only path from /cmd_vel to the robot)
-ros2 run helix_arbiter helix_go2_sport_sink --ros-args -p mode:=armed
+SSESSION=~/riskgraph_sink/$(date +%Y%m%d_%H%M)
+# T2: the sink, STOP ONLY first
+ros2 run riskgraph_nav riskgraph_sport_sink --ros-args -p mode:=stop_only
+# T4: S0 publishes 0.10 m/s for 1 s; the sink must answer only StopMove (NOT_ARMED),
+#     the robot must stay still, the robot must acknowledge (code 0).
+#     Also records sport_baseline.json (the robot's own /api/sport/request publishers).
+ros2 run riskgraph_nav riskgraph_sink_stage --stage S0 --session-dir $SSESSION --repo ~/riskgraph-go2 \
+    --confirm "ROBOT STANDING STOP ONLY"
+# T2: Ctrl-C, restart ARMED
+ros2 run riskgraph_nav riskgraph_sport_sink --ros-args -p mode:=armed
+# T4: S1 one bounded move: 0.15 m/s for 2 s, then zero. PASS: peak 0.05-0.25 m/s,
+#     StopMove (ZERO) acknowledged, robot still within 1.5 s, no Move after zero.
+ros2 run riskgraph_nav riskgraph_sink_stage --stage S1 --session-dir $SSESSION --repo ~/riskgraph-go2 \
+    --confirm "AREA CLEAR MOVE"
+# T4: S2 deadman: 0.15 m/s for 1.5 s, then SILENCE (no zero). PASS: StopMove (DEADMAN)
+#     within 0.40 s of the last command, acknowledged, robot still within 1.5 s.
+ros2 run riskgraph_nav riskgraph_sink_stage --stage S2 --session-dir $SSESSION --repo ~/riskgraph-go2 \
+    --confirm "AREA CLEAR DEADMAN"
 ```
-Expected: T1 shows the arbiter `NO_LIVE_INPUT`; T2 shows mode armed, StopMove at 2 Hz while idle.
+Each stage refuses to run unless the previous one passed in the same session
+at the same SHA, and aborts (zero command, FAIL) above 0.35 m/s or 1.0 m of
+travel. Any FAIL: stop here; there is no "retry until it passes". Re-place the
+robot between stages with the remote. Leave T2 running ARMED for the trial.
 
 Stand the robot **with the remote** (stand lock, then Start; never through the
 API; only mcf). Walk it onto marker A facing B. Release the sticks.
@@ -185,7 +201,7 @@ Expected within ~5 s:
 ```bash
 # T4: preflight (RiskGraph NOT running yet; the runner launches it)
 cd ~/riskgraph-go2
-./scripts/preflight_live.sh --helix-session $HSESSION --expected-branch <branch>
+./scripts/preflight_live.sh --sink-session $SSESSION --expected-branch <branch>
 ```
 Expected: a table of checks P01..P38 and `PREFLIGHT: GO`. Any FAIL prints
 `PREFLIGHT: NO-GO ... DO NOT MOVE THE ROBOT` and the failing checks. Fix,
@@ -193,7 +209,7 @@ rerun. Do not continue on NO-GO.
 
 ```bash
 # T4: the trial (Trials A-E), with evidence
-./scripts/run_live_trial.sh --helix-session $HSESSION --expected-branch <branch> --db-tag t$(date +%Y%m%d_%H%M)
+./scripts/run_live_trial.sh --sink-session $SSESSION --expected-branch <branch> --db-tag t$(date +%Y%m%d_%H%M)
 ```
 
 ## 6. What the runner does, and what you do
@@ -202,7 +218,7 @@ rerun. Do not continue on NO-GO.
 |---|---|---|
 | start | writes `manifest.json`, copies the DB, preflight (before launch), launches RiskGraph, preflight again (running), starts the rosbag | type `REMOTE IN HAND` |
 | every trial start | asks you to put the robot PHYSICALLY on marker A; records the odometry pose there as **measured drift** (aborts above 0.5 m / 20 deg); **re-anchors the map on the marker** | walk it onto the tape with the remote, release the sticks, Enter. Place by the tape, never by the printed pose |
-| Trial A | asks Nav2 for a path to B; prints the **arming screen** (goal, pose, route, risk entries, arbiter, sink, Nav2 states, DB, SHA, map id) | check the route is the LEFT corridor; type `ARM LIVE GO2 RISKGRAPH TRIAL` |
+| Trial A | asks Nav2 for a path to B; prints the **arming screen** (goal, pose, route, risk entries, sink mode and last decision, Nav2 states, DB, SHA, map id) | check the route is the LEFT corridor; type `ARM LIVE GO2 RISKGRAPH TRIAL` |
 | | sends that exact path to the controller and monitors (abort list, section 7) | spotter walks beside, remote ready |
 | Trial B | takes the robot pose it recorded (TF, live) where the baseline passed the box, stores an `OPERATOR_INJECTED` event there, verifies the SQLite row and that Nav2's costmap rose | type `INJECT RISK` |
 | Trial C | re-anchors on A (row above), plans again; requires the route to change corridor and lower risk BEFORE it will arm; arming screen | type `ARM LIVE GO2 RISKGRAPH TRIAL`; watch it take the RIGHT corridor |
@@ -222,7 +238,7 @@ with a new `--db-tag` (the baseline needs an empty database).
 * `map -> odom -> base_link` TF missing for > 0.5 s
 * robot > 0.75 m off the approved route, or > 0.35 m/s
 * another motion source appears (`/cmd_vel`, `/nav/cmd_vel`, `/api/sport/request` publishers change)
-* HELIX hold active, arbiter status stale, RiskGraph unhealthy / invalid grid / map id mismatch
+* sport sink trace stale (> 1 s) or the sink rejected a command, RiskGraph unhealthy / invalid grid / map id mismatch
 * no progress (< 0.2 m in 15 s: oscillation or stall), or > 120 s
 * RiskGraph status older than 3 s, the map re-anchored mid-route, or the rosbag recorder died
 * the robot is not still after the goal ends or is cancelled (odometry), or the command persists
@@ -245,7 +261,7 @@ Machine-checked in `summary.json` (`criteria`):
 8. the GO2 executed that corridor (odometry), with lower executed risk
 9. restart kept the event (new process, same incidents, same DB)
 10. restored risk changes the route again (and the ablation reverts it)
-11. no second motor authority; 12. motion only through arbiter + sink
+11. no second motor authority; 12. motion only through the sport sink, which rejected nothing
 13. evidence bundle complete; E. graceful fallback
 
 `hardware_pass` in `summary.json` is true only if the evidence class is
@@ -288,23 +304,24 @@ Replay parity afterwards (off-robot): `./scripts/replay_trial_bag.sh <run_dir>`.
 | P17 JUMP | odometry jumped (robot rebooted or odom reset): put the robot on A, call the anchor service |
 | P20 extra TF publisher | another stack publishes `/tf` (e.g. an odom broadcaster): stop it |
 | P27 / P28 map or class mismatch | the DB belongs to another course or a rehearsal: use a new `--db-tag` |
-| P33 no baseline / extra publisher | pass the HELIX session dir; stop the extra `/api/sport/request` publisher |
-| P35 HELIX holding | HELIX saw a fault: check T1, wait for release; a trial under a hold is confounded |
-| P37 FAIL | HELIX stages D/E have not passed on this robot today |
+| P33 no baseline / extra publisher | pass `--sink-session` (S0 wrote `sport_baseline.json`); stop the extra `/api/sport/request` publisher |
+| P35 sink not fresh / not holding zero | sink (T2) died or something is driving `/nav/cmd_vel`: check T2, `ros2 topic echo /riskgraph/sink/trace` |
+| P31 another sink | another stack's sport sink (e.g. HELIX's) is running: stop it; there must be one motion exit |
+| P37 FAIL | sink stages S0-S2 not all PASS live, or they ran at another SHA: rerun section 5 step 0 at this SHA |
 | Trial C refuses to arm | the plan did not change corridor: check `ros2 topic echo --once /riskgraph/status`, and that `/global_costmap/costmap` is high at the event |
 | Post-launch preflight NO-GO with many facts `None` (P17, P21, P27, P28, P35, P36) while the graph checks (P12, P26, P31 to P34) pass | Seen intermittently in off-robot rehearsal (2026-10-06), cause not yet found. Fail-safe: nothing moves. Re-run the runner once with a new `--db-tag`; if it repeats, keep the evidence bundle |
-| robot does not move after arming | sink not armed, arbiter holding, or the gait does not respond to 0.2 m/s (section 11) |
+| robot does not move after arming | sink not armed, sink rejecting (trace reason), or the gait does not respond to 0.2 m/s (section 11) |
 
 Useful: `ros2 topic echo --once /riskgraph/localization/status`,
 `ros2 topic echo --once /riskgraph/status`, `ros2 run tf2_ros tf2_echo map base_link`,
-`ros2 topic echo /helix/arbiter/status --field reason`.
+`ros2 topic echo /riskgraph/sink/trace`.
 
 ## 11. Known limitations and hardware-only unknowns
 
 * **Gait at Nav2 speeds.** Nav2 commands <= 0.20 m/s with gentle yaw while
   walking. The GO2 has tracked a straight 0.15 m/s command for 2 s (field notes
-  section 4), but HELIX stage D has **not** run on this robot yet, and nothing has
-  driven it at Nav2 speeds with yaw. The field notes put a clean trot at
+  section 4; sink stage S1 repeats that move), but nothing has driven it at
+  Nav2 speeds with yaw. The field notes put a clean trot at
   `vx >= 0.5` and say combined forward + yaw degrades, so expect a shaky gait;
   whether it still follows the curve round the box first shows in Trial A.
 * **Odometry drift.** Odometry cannot see its own drift, so the map is
@@ -313,8 +330,14 @@ Useful: `ros2 topic echo --once /riskgraph/localization/status`,
   accumulated WITHIN one ~6 m route is not corrected; the physical box and the
   map box could disagree by that much. The spotter watches the robot's
   clearance to the box; a visible mismatch is an abort.
-* **Physical stop latency and distance** through the HELIX chain are HELIX's
-  stage-E measurements, not RiskGraph's.
+* **Physical stop** is proven only by sink stages S1 (zero) and S2 (deadman)
+  at 0.15 m/s straight; stop distance at Nav2 speeds with yaw is measured by the
+  trial's post-goal stillness checks, not by a dedicated stage.
+* **StopMove at 2 Hz while idle.** The armed sink sends DEADMAN StopMove every
+  0.5 s when Nav2 is quiet. Whether that interferes with walking the robot back
+  to marker A with the remote is unmeasured. If the remote fights it, Ctrl-C T2
+  before walking and restart it armed before the next arming phrase (the arming
+  check refuses a stale or unarmed sink).
 * **Nav2 on the payload**: Nav2, slam_toolbox and pointcloud_to_laserscan are
   installed on the payload Jetson and the workspace builds there offline
   (section 12).
@@ -323,7 +346,7 @@ Useful: `ros2 topic echo --once /riskgraph/localization/status`,
 ## 12. Stationary check on the payload (2026-09-18)
 
 The robot was lying down and powered, with every sensor live. Nothing was
-allowed to reach the HELIX arbiter or the robot: the navigation side ran with
+allowed to reach the motion path or the robot: the navigation side ran with
 `sink_prefix:=/rg_check` (below) and memory ran with `run_mode:=test` on a
 throwaway database. `/api/sport/request` kept its 9 robot-owned publishers
 throughout.

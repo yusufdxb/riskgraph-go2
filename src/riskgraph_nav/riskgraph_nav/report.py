@@ -62,8 +62,8 @@ def criteria(results: Dict, manifest: Dict, run_dir: str) -> List[Dict]:
          _get(d, "pass") is True),
         ("11", "no second motor-command authority (preflight P30/P31/P33/P34, no change during runs)",
          pre_ok and not str(results.get("abort_reason") or "").startswith("MOTION_SOURCE")),
-        ("12", "motion only through arbiter + sink; no HELIX-held motion",
-         pre_ok and all((_get(t.get(k, {}), "execution", "arbiter", "nonzero_while_hold") or 0) == 0
+        ("12", "motion only through the RiskGraph sport sink, which rejected nothing",
+         pre_ok and all(_get(t.get(k, {}), "execution", "sink", "rejects") == 0
                         for k in ("A_baseline", "C_risk_aware"))),
         ("13", "evidence bundle complete (manifest, preflight, DB copies, logs, bag)",
          all(os.path.exists(os.path.join(run_dir, f)) for f in files) and bag_ok

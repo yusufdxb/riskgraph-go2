@@ -11,8 +11,8 @@ These three goals must be met without coupling the core logic to ROS, so the sam
 ## Overview
 
 Two paths. The **risk-memory path** is RiskGraph proper; the **motion path**
-belongs to Nav2 and the HELIX motion arbiter, and RiskGraph never publishes
-into it (see `docs/HW_VERIFICATION.md` section 1 for the full live topology).
+runs Nav2 into one exit, `riskgraph_sport_sink` (Move / StopMove only, with a
+deadman); the risk-memory nodes never publish into it (see `docs/HW_VERIFICATION.md` section 1 for the full live topology).
 
 ```mermaid
 flowchart TD
@@ -157,5 +157,5 @@ live procedure run off-robot. The live procedure is `docs/HW_VERIFICATION.md`.
 - **Online LLM in the explanation path.** Determinism + auditable evidence first. LLM rephrasing is a v0.2 concern.
 - **Custom CUDA / Gaussian splatting / heavyweight perception.** Out of scope; we consume upstream perception as messages.
 - **Path planning from scratch or a custom Nav2 plugin.** Nav2's NavFn plans; RiskGraph only contributes a cost layer through a stock StaticLayer.
-- **Any motion command.** No `/cmd_vel`, no sport API. The HELIX arbiter + sport sink are the only motion authority.
+- **Motion outside one exit.** Only `riskgraph_sport_sink` publishes sport requests (Move 1008 / StopMove 1003); nothing publishes `/cmd_vel`.
 - **Mutable graph topology in the MVP.** Segments are static within a session. Cross-run topology learning is a v0.3 concern.

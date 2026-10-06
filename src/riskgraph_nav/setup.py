@@ -27,6 +27,8 @@ setup(
             'riskgraph_generate_course_map = riskgraph_nav.course_map_cli:main',
             'riskgraph_replay_check = riskgraph_nav.replay_check:main',
             'riskgraph_rehearsal_go2 = riskgraph_nav.rehearsal_go2:main',
+            'riskgraph_sport_sink = riskgraph_nav.sport_sink:main',
+            'riskgraph_sink_stage = riskgraph_nav.sink_stage:main',
         ],
     },
 )

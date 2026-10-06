@@ -1,14 +1,14 @@
 """Hardware preflight for the live RiskGraph GO2 trial. Publishes nothing.
 
     ros2 run riskgraph_nav riskgraph_preflight --mode live \\
-        --helix-session ~/helix_hw/<date>_motion [--riskgraph expect-absent]
+        --sink-session ~/riskgraph_sink/<date> [--riskgraph expect-absent]
 
 Two halves:
 
 * :func:`collect` reads the machine and the live ROS graph into a plain
   ``facts`` dict (git, environment, packages, disk, processes, topics and
   rates, TF, lifecycle states, parameters, RiskGraph / localization status,
-  HELIX motion-path state and hardware evidence).
+  sport-sink state and its on-robot stage evidence).
 * :func:`evaluate` is pure: facts in, checks out. Every check is PASS, WARN,
   FAIL or INFO. **Any FAIL is NO-GO.** It is unit tested on synthetic facts.
 
@@ -29,21 +29,22 @@ import time
 from dataclasses import asdict, dataclass, field
 from typing import Dict, List, Optional
 
+from .sport_sink_core import API_STOP_MOVE, NODE_NAME as SINK_NODE_NAME, TRACE_TOPIC as SINK_TRACE
+
 PASS, WARN, FAIL, INFO = "PASS", "WARN", "FAIL", "INFO"
+SINK_STAGES = ("S0", "S1", "S2")
 
 ODOM_TOPIC = "/utlidar/robot_odom"
 NAV_NODES = ["/map_server", "/planner_server", "/controller_server", "/velocity_smoother"]
 RG_NODES = ["/riskgraph_memory", "/riskgraph_planner", "/riskgraph_explainer"]
 LOC_NODE = "/riskgraph_localization"
-ARBITER = "/helix_arbiter"
-SINK = "/helix_go2_sport_sink"
-RECOVERY = "/helix_recovery_node"
+SINK = "/" + SINK_NODE_NAME
 GLOBAL_COSTMAP = "/global_costmap/global_costmap"
 REQUIRED_PKGS = ["nav2_map_server", "nav2_planner", "nav2_navfn_planner", "nav2_controller",
                  "nav2_regulated_pure_pursuit_controller", "nav2_velocity_smoother",
                  "nav2_lifecycle_manager", "nav2_costmap_2d", "nav2_msgs", "rosbag2",
                  "tf2_ros", "riskgraph_msgs", "riskgraph_bringup", "riskgraph_nav"]
-LIVE_PKGS = ["unitree_api", "helix_msgs", "helix_arbiter"]
+LIVE_PKGS = ["unitree_api"]
 MOTION_TYPES = {"geometry_msgs/msg/Twist", "geometry_msgs/msg/TwistStamped",
                 "unitree_api/msg/Request"}
 
@@ -61,7 +62,7 @@ class Config:
     min_odom_hz: float = 50.0
     max_odom_age_s: float = 0.25
     sink_limits: Dict[str, float] = field(default_factory=lambda: {"max_vx": 0.25, "max_wz": 0.50})
-    helix_session: Optional[str] = None
+    sink_session: Optional[str] = None
     sport_baseline: Optional[List[str]] = None
 
 
@@ -217,30 +218,34 @@ def evaluate(f: Dict, cfg: Config) -> List[Check]:
     add("P30", "RiskGraph/localization publish NO velocity or sport command", _b(not rg_motion),
         f"{rg_motion}")
     cmd_pubs = f.get("cmd_vel_publishers", [])
-    add("P31", "/cmd_vel has exactly one publisher: helix_arbiter", _b(cmd_pubs == [ARBITER]), str(cmd_pubs))
-    add("P32", "helix_go2_sport_sink consumes /cmd_vel", _b(SINK in (f.get("cmd_vel_subscribers") or [])),
-        str(f.get("cmd_vel_subscribers")))
+    foreign = f.get("foreign_sinks", [])
+    add("P31", "/cmd_vel unused and no other sport sink running (one motion exit)",
+        _b(not cmd_pubs and not foreign), f"/cmd_vel publishers={cmd_pubs} other sinks={foreign}")
+    add("P32", "riskgraph_sport_sink consumes /nav/cmd_vel",
+        _b(SINK in (f.get("nav_cmd_vel_subscribers") or [])), str(f.get("nav_cmd_vel_subscribers")))
     req = f.get("sport_request_publishers", [])
     if cfg.sport_baseline is not None:
         extra = [n for n in req if n not in cfg.sport_baseline and n != SINK]
-        add("P33", "no /api/sport/request publisher beyond the HELIX stage-A baseline + sink",
+        add("P33", "no /api/sport/request publisher beyond the sink stage S0 baseline + sink",
             _b(not extra), f"extra={extra}")
     else:
         add("P33", "/api/sport/request baseline", FAIL if live else INFO,
-            "no stage-A baseline (HELIX session dir sport_baseline.json); competing robot-side "
+            "no S0 baseline (sink session sport_baseline.json); competing robot-side "
             "command sources are unverifiable" if live else f"publishers={req}")
     add("P34", "no twist_mux (a second arbiter)", _b(not f.get("twist_mux_nodes")), str(f.get("twist_mux_nodes")))
-    arb = f.get("arbiter") or {}
-    add("P35", "motion arbiter alive, HELIX state fresh, NOT holding, output zero",
-        _b(arb.get("fresh") and not arb.get("hold_active") and arb.get("output_zero")),
-        f"{arb}")
+    sk = f.get("sink") or {}
+    add("P35", "sport sink alive (trace fresh) and holding zero (last decision StopMove)",
+        _b(sk.get("fresh") and sk.get("api_id") == API_STOP_MOVE), f"{sk}")
     add("P36", "sport sink ARMED (the only path Nav2 motion can take)",
         _b((f.get("sink_params") or {}).get("mode") == "armed"), f"{f.get('sink_params')}")
-    ev = f.get("helix_evidence") or {}
+    ev = f.get("sink_evidence") or {}
+    head = (f.get("git") or {}).get("sha")
     ok_ev = all((ev.get(s) or {}).get("verdict") == "PASS" and
-                ((ev.get(s) or {}).get("rehearsal") is False or not live) for s in ("D", "E"))
-    add("P37", "HELIX motion path proven on this robot (HW_MOTION_TEST stages D and E PASS)",
-        _b(ok_ev), f"{ {s: {k: (ev.get(s) or {}).get(k) for k in ('verdict', 'rehearsal', 'git_sha')} for s in ('D', 'E')} }")
+                ((ev.get(s) or {}).get("rehearsal") is False or not live) and
+                (ev.get(s) or {}).get("git_sha") == head for s in SINK_STAGES)
+    add("P37", "sink stop proven on this robot at this SHA (stages S0, S1, S2 PASS)",
+        _b(ok_ev), f"head={str(head)[:7]} " + str({s: {k: (ev.get(s) or {}).get(k) for k in
+                                                   ('verdict', 'rehearsal', 'git_sha')} for s in SINK_STAGES}))
     spd = loc.get("speed_mps")
     add("P38", "robot stationary at preflight", _b(spd is not None and spd < 0.05), f"speed={spd}")
     return out
@@ -312,16 +317,11 @@ def processes() -> Dict[str, List[str]]:
     }
 
 
-def read_helix_evidence(session: Optional[str]) -> Dict[str, Optional[dict]]:
-    out: Dict[str, Optional[dict]] = {}
-    for s in ("A", "B", "C", "D", "E", "F"):
-        p = os.path.join(session, f"stage_{s}", "evidence.json") if session else ""
-        try:
-            ev = json.load(open(p))
-            out[s] = {k: ev.get(k) for k in ("verdict", "rehearsal", "git_sha", "config_hash")}
-        except (OSError, ValueError):
-            out[s] = None
-    return out
+def read_sink_stage_evidence(session: Optional[str]) -> Dict[str, Optional[dict]]:
+    from .sink_stage_core import read_sink_evidence
+    ev = read_sink_evidence(session) if session else {}
+    return {s: ({k: (ev.get(s) or {}).get(k) for k in ("verdict", "rehearsal", "git_sha")}
+                if ev.get(s) else None) for s in SINK_STAGES}
 
 
 def collect(probe, cfg: Config, repo: str, listen_s: float = 2.0) -> Dict:
@@ -397,7 +397,7 @@ def collect(probe, cfg: Config, repo: str, listen_s: float = 2.0) -> Dict:
             f["riskgraph_store_paths"][nn] = pv["store_path"]
     motion = {}
     for nn in nodes:
-        if nn.startswith("/riskgraph") or nn == LOC_NODE:
+        if (nn.startswith("/riskgraph") or nn == LOC_NODE) and nn != SINK:
             motion[nn] = sorted(t for t, types in probe.topics_published_by(nn).items()
                                 if set(types) & MOTION_TYPES)
     f["riskgraph_motion_topics"] = motion
@@ -405,25 +405,29 @@ def collect(probe, cfg: Config, repo: str, listen_s: float = 2.0) -> Dict:
     f["cmd_vel_subscribers"] = subs("/cmd_vel")
     f["sport_request_publishers"] = pubs("/api/sport/request")
     f["twist_mux_nodes"] = [nn for nn in nodes if "twist_mux" in nn]
-    f["arbiter"] = _arbiter_facts(probe) if ARBITER in nodes else {"present": False}
-    f["helix_evidence"] = read_helix_evidence(cfg.helix_session)
+    f["nav_cmd_vel_subscribers"] = subs("/nav/cmd_vel")
+    f["foreign_sinks"] = [nn for nn in nodes if "sport_sink" in nn and nn != SINK]
+    f["sink"] = _sink_facts(probe) if SINK in nodes else {"present": False}
+    f["sink_evidence"] = read_sink_stage_evidence(cfg.sink_session)
     if cfg.riskgraph == "expect-absent":
         f["db"] = _db_facts(cfg.store_path)
     return f
 
 
-def _arbiter_facts(probe) -> Dict:
+def _sink_facts(probe) -> Dict:
     from .ros_graph import SENSOR
     try:
-        m = probe.wait_one("/helix/arbiter/status", "helix_msgs/msg/ArbiterStatus", 2.0, qos=SENSOR)
+        m = probe.wait_one(SINK_TRACE, "std_msgs/msg/String", 2.0, qos=SENSOR)
     except Exception as exc:
-        return {"present": True, "error": f"cannot read ArbiterStatus: {exc}"}
+        return {"present": True, "error": f"cannot read the sink trace: {exc}"}
     if m is None:
         return {"present": True, "fresh": False}
-    return {"present": True, "fresh": True, "reason": m.reason, "hold_active": bool(m.hold_active),
-            "selected_source": m.selected_source,
-            "output_zero": m.out_linear_x == 0.0 and m.out_linear_y == 0.0 and m.out_angular_z == 0.0,
-            "sink_subscribers": int(m.sink_subscribers)}
+    try:
+        d = json.loads(m.data)
+    except ValueError:
+        return {"present": True, "fresh": False, "error": "unparseable trace"}
+    return {"present": True, "fresh": True, "mode": d.get("mode"), "api_id": d.get("api_id"),
+            "reason": d.get("reason"), "sent_to_robot": d.get("sent_to_robot")}
 
 
 def _db_facts(path: str) -> Dict:
@@ -481,15 +485,17 @@ def build_config(a) -> Config:
     from .paths import resolve
     r = resolve(a.experiment, a.store_path, a.db_root, a.db_tag)
     baseline = None
-    bpath = a.sport_baseline or (os.path.join(a.helix_session, "sport_baseline.json")
-                                 if a.helix_session else None)
+    bpath = a.sport_baseline or (os.path.join(a.sink_session, "sport_baseline.json")
+                                 if a.sink_session else None)
     if bpath and os.path.exists(bpath):
         baseline = json.load(open(bpath))
+        if isinstance(baseline, dict):
+            baseline = baseline.get("publishers")
     return Config(mode=a.mode, riskgraph=getattr(a, "riskgraph", "expect-absent"),
                   expected_branch=a.expected_branch,
                   expected_iface=a.iface, store_path=r.store_path, map_id=r.map_id,
                   evidence_root=os.path.expanduser(a.evidence_root),
-                  helix_session=a.helix_session, sport_baseline=baseline)
+                  sink_session=a.sink_session, sport_baseline=baseline)
 
 
 def add_common_args(ap: argparse.ArgumentParser) -> None:
@@ -500,8 +506,8 @@ def add_common_args(ap: argparse.ArgumentParser) -> None:
     ap.add_argument("--db-root", default=DEFAULT_DB_ROOT)
     ap.add_argument("--db-tag", default=DEFAULT_DB_TAG)
     ap.add_argument("--evidence-root", default=DEFAULT_EVIDENCE_ROOT)
-    ap.add_argument("--helix-session", default=None,
-                    help="HELIX HW_MOTION_TEST session dir (stage_D/E evidence, sport_baseline.json)")
+    ap.add_argument("--sink-session", default=None,
+                    help="riskgraph_sink_stage session dir (stage_S0/S1/S2.json, sport_baseline.json)")
     ap.add_argument("--sport-baseline", default=None)
     ap.add_argument("--expected-branch", default=None)
     ap.add_argument("--iface", default="enP8p1s0")

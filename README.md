@@ -39,7 +39,7 @@ RiskGraph has never moved a real GO2. The live experiment is fully prepared
 | Risk model, SQLite store v2, map identity, geometry, ingestion policy | Verified off-robot | `./scripts/run_tests.sh` (unit suites, no ROS needed) |
 | Remembered risk changes Nav2's route | Verified off-robot, real Nav2 processes | `tests/integration`: one stored event moves NavFn from the left corridor to the right; SIGINT blanks the layer and the plan reverts; restart restores it from disk |
 | TF: skewed-clock GO2 odometry to `map` via the start-marker anchor | Verified off-robot | `tests/integration` (fake odometry with the measured robot clock skew) |
-| Full live procedure, Trials A-E, through the HELIX arbiter and sport sink | Rehearsed off-robot against a stand-in robot | `scripts/rehearse_live_trial.sh`; evidence is labelled REHEARSAL and can never count as hardware |
+| Full live procedure: sink stages S0-S2, then Trials A-E through the RiskGraph sport sink | Rehearsed off-robot against a stand-in robot | `scripts/rehearse_live_trial.sh`; evidence is labelled REHEARSAL and can never count as hardware |
 | GO2 physically walking the baseline and the risk-aware routes | **NOT verified** | Requires the lab session in `docs/HW_VERIFICATION.md` |
 | Live upstream adapters (safety, HELIX faults, slip flag) | NOT verified | Stub-tested only; not needed by the canonical trial |
 
@@ -57,14 +57,13 @@ flowchart LR
   LOC --> MEM
   MEM -- "/riskgraph/risk_costmap<br/>OccupancyGrid 0..90" --> NAV["Nav2 planner_server<br/>global costmap risk layer"]
   NAV --> CTRL["controller_server"] --> VS["velocity_smoother"]
-  VS -- "/nav/cmd_vel" --> ARB["HELIX motion arbiter"]
-  ARB -- "/cmd_vel" --> SINK["HELIX sport sink"] -- "/api/sport/request" --> GO2["GO2"]
+  VS -- "/nav/cmd_vel" --> SINK["riskgraph_sport_sink<br/>Move / StopMove only, 0.25 s deadman"] -- "/api/sport/request" --> GO2["GO2"]
 ```
 
 Risk is a non-lethal cost: when every corridor is risky, Nav2 still plans. The
-only motion authority is the HELIX arbiter + sport sink; the live preflight
-refuses to go if any other publisher of `/cmd_vel`, `/nav/cmd_vel` or
-`/api/sport/request` appears.
+only motion exit is `riskgraph_sport_sink`, whose stop is proven on the robot
+(stages S0-S2) before any trial; the live preflight refuses to go if any other
+publisher of `/cmd_vel`, `/nav/cmd_vel` or `/api/sport/request` appears.
 
 | Package | Role |
 | --- | --- |
@@ -88,12 +87,13 @@ python3 -m pytest tests/integration    # real RiskGraph + Nav2 processes, no rob
 ros2 run riskgraph_nav riskgraph_status --db-tag trial   # DB path, schema, map id, incidents
 ```
 
-Lab session (payload Jetson, after HELIX `HW_MOTION_TEST` stages D and E pass):
+Lab session (payload Jetson, after sink stages S0-S2 pass, `docs/HW_VERIFICATION.md` section 5):
 
 ```bash
+ros2 run riskgraph_nav riskgraph_sport_sink --ros-args -p mode:=armed
 ros2 launch riskgraph_bringup riskgraph_nav_live.launch.py      # robot still on marker A
-./scripts/preflight_live.sh --helix-session <helix_session_dir>  # must print PREFLIGHT: GO
-./scripts/run_live_trial.sh --helix-session <helix_session_dir>  # Trials A-E, typed arming
+./scripts/preflight_live.sh --sink-session <sink_session_dir>    # must print PREFLIGHT: GO
+./scripts/run_live_trial.sh --sink-session <sink_session_dir>    # Trials A-E, typed arming
 ```
 
 Full procedure, abort conditions and PASS criteria: `docs/HW_VERIFICATION.md`.

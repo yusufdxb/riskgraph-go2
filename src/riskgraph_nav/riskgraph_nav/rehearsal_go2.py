@@ -3,7 +3,7 @@
 Stands in for the GO2 at the two interfaces the trial touches:
 
 * consumes ``unitree_api/msg/Request`` on ``/api/sport/request`` exactly as
-  the HELIX sport sink publishes it (Move 1008, StopMove 1003; anything else
+  the RiskGraph sport sink publishes it (Move 1008, StopMove 1003; anything else
   is answered with code -1 and counted), answers on ``/api/sport/response``;
 * publishes ``/utlidar/robot_odom`` (nav_msgs/Odometry, 150 Hz, ``odom`` ->
   ``base_link``) with header stamps offset by ``clock_skew_s``: by default
@@ -81,8 +81,8 @@ class RehearsalGo2(Node):
         self._pub_state = self.create_publisher(String, "/rehearsal/state", 10)
         self.create_timer(1.0 / 150.0, self._step)
         self.create_timer(1.0, self._state_tick)
-        # The other topics the HELIX monitors watch on a real GO2 (rates from
-        # the GO2 field notes), so HELIX sees a healthy robot and does not hold.
+        # The other sensor topics a real GO2 publishes (rates from the GO2
+        # field notes), so monitors sampling them see a healthy robot.
         self._pub_imu = self.create_publisher(Imu, "/utlidar/imu", qos_profile_sensor_data)
         self._pub_cloud = self.create_publisher(PointCloud2, "/utlidar/cloud", qos_profile_sensor_data)
         self._pub_pose = self.create_publisher(PoseStamped, "/utlidar/robot_pose", 10)

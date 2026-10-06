@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # The canonical live RiskGraph GO2 trial (Trials A-E), with evidence bundle.
-# Start the HELIX closed loop, the sport sink (armed) and
-# riskgraph_nav_live.launch.py first (docs/HW_VERIFICATION.md section 5).
+# Pass the sink stages S0-S2 first, then start the RiskGraph sport sink
+# (armed) and riskgraph_nav_live.launch.py (docs/HW_VERIFICATION.md section 5).
 #
-#   ./scripts/run_live_trial.sh --helix-session ~/helix_hw/<date>_motion [--db-tag trial]
+#   ./scripts/run_live_trial.sh --sink-session ~/riskgraph_sink/<date> [--db-tag trial]
 #
 # Nothing moves until you type the arming phrase for each route.
 set -uo pipefail

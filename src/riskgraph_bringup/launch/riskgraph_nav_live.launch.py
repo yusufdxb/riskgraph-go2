@@ -12,13 +12,13 @@ experiment file), planner_server (global costmap = map + RiskGraph risk
 layer), controller_server (RPP), velocity_smoother, lifecycle manager.
 
 Motion output: controller -> /cmd_vel_nav -> velocity_smoother ->
-/nav/cmd_vel. /nav/cmd_vel is a SOURCE of the HELIX motion arbiter; nothing
-here publishes /cmd_vel or talks to the robot. No goal is ever sent by this
+/nav/cmd_vel. /nav/cmd_vel is the only input of riskgraph_sport_sink (started
+separately, docs/HW_VERIFICATION.md section 5); nothing here talks to the robot. No goal is ever sent by this
 launch: motion only happens after the trial runner's typed arming.
 
 Stationary check: ``sink_prefix:=/rg_check`` moves every output of this launch
 (/cmd_vel_nav, /nav/cmd_vel, /tf, /tf_static) under that prefix, so the stack can
-be brought up on a live robot with nothing reaching the HELIX arbiter or the
+be brought up on a live robot with nothing reaching the sport sink or the
 robot's TF tree. Empty (the default) keeps the real topics.
 """
 import os

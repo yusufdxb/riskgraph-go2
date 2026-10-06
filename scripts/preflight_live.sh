@@ -2,7 +2,7 @@
 # Live preflight: run immediately before a moving trial. Publishes nothing.
 # Any FAIL prints NO-GO and exits 1. A GO verifies nothing about the robot.
 #
-#   ./scripts/preflight_live.sh --helix-session ~/helix_hw/<date>_motion [--expected-branch main]
+#   ./scripts/preflight_live.sh --sink-session ~/riskgraph_sink/<date> [--expected-branch main]
 #
 # Default --mode live. All other flags: ros2 run riskgraph_nav riskgraph_preflight -h
 set -uo pipefail

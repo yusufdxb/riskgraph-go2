@@ -44,7 +44,7 @@ experiment:
   acceptance:
     min_route_separation_m: 0.30
     max_cross_track_m: 0.75   # abort if the robot leaves the approved path by more
-    max_speed_mps: 0.35       # abort above this (HELIX sink caps commands at 0.25)
+    max_speed_mps: 0.35       # abort above this (the sport sink caps commands at 0.25)
     stationary_speed_mps: 0.05
     max_execution_s: 120.0
     # Before every trial the robot is put back on marker A by hand and the map

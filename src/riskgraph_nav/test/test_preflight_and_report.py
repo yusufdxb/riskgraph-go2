@@ -8,7 +8,7 @@ import pytest
 
 from riskgraph_nav.paths import resolve
 from riskgraph_nav.preflight import (
-    ARBITER, FAIL, GLOBAL_COSTMAP, LOC_NODE, LIVE_PKGS, NAV_NODES, REQUIRED_PKGS, RG_NODES, SINK,
+    FAIL, GLOBAL_COSTMAP, LOC_NODE, LIVE_PKGS, NAV_NODES, REQUIRED_PKGS, RG_NODES, SINK,
     Config, evaluate, verdict)
 from riskgraph_nav.report import criteria
 
@@ -43,10 +43,10 @@ def good_facts():
                              "grid_stats": {"out_of_range_cells": 0}},
         "riskgraph_store_paths": {n: R.store_path for n in RG_NODES},
         "riskgraph_motion_topics": {n: [] for n in RG_NODES},
-        "cmd_vel_publishers": [ARBITER], "cmd_vel_subscribers": [SINK],
+        "cmd_vel_publishers": [], "foreign_sinks": [], "nav_cmd_vel_subscribers": [SINK],
         "sport_request_publishers": ["/stock_a", SINK], "twist_mux_nodes": [],
-        "arbiter": {"fresh": True, "hold_active": False, "output_zero": True},
-        "helix_evidence": {"D": {"verdict": "PASS", "rehearsal": False}, "E": {"verdict": "PASS", "rehearsal": False}},
+        "sink": {"present": True, "fresh": True, "mode": "armed", "api_id": 1003, "reason": "DEADMAN"},
+        "sink_evidence": {s: {"verdict": "PASS", "rehearsal": False, "git_sha": "abc"} for s in ("S0", "S1", "S2")},
     }
 
 
@@ -89,14 +89,19 @@ def test_good_facts_are_go():
     (lambda f: f["riskgraph_status"].update(map_id="stale-map"), "P28"),
     (lambda f: f["riskgraph_status"].update(evidence_class="replay"), "P28"),
     (lambda f: f["riskgraph_motion_topics"].update({"/riskgraph_memory": ["/cmd_vel"]}), "P30"),
-    (lambda f: f.update(cmd_vel_publishers=[ARBITER, "/rogue"]), "P31"),
-    (lambda f: f.update(cmd_vel_subscribers=[]), "P32"),
+    (lambda f: f.update(cmd_vel_publishers=["/rogue"]), "P31"),
+    (lambda f: f.update(foreign_sinks=["/helix_go2_sport_sink"]), "P31"),
+    (lambda f: f.update(nav_cmd_vel_subscribers=[]), "P32"),
     (lambda f: f.update(sport_request_publishers=["/stock_a", SINK, "/new_thing"]), "P33"),
     (lambda f: f.update(twist_mux_nodes=["/twist_mux"]), "P34"),
-    (lambda f: f["arbiter"].update(hold_active=True), "P35"),
+    (lambda f: f["sink"].update(fresh=False), "P35"),
+    (lambda f: f["sink"].update(api_id=1008, reason="MOVE"), "P35"),
+    (lambda f: f.update(sink={"present": False}), "P35"),
     (lambda f: f["sink_params"].update(mode="dry_run"), "P36"),
-    (lambda f: f["helix_evidence"].update(E=None), "P37"),
-    (lambda f: f["helix_evidence"].update(D={"verdict": "PASS", "rehearsal": True}), "P37"),
+    (lambda f: f["sink_evidence"].update(S2=None), "P37"),
+    (lambda f: f["sink_evidence"].update(S1={"verdict": "FAIL", "rehearsal": False, "git_sha": "abc"}), "P37"),
+    (lambda f: f["sink_evidence"].update(S0={"verdict": "PASS", "rehearsal": True, "git_sha": "abc"}), "P37"),
+    (lambda f: f["sink_evidence"].update(S1={"verdict": "PASS", "rehearsal": False, "git_sha": "old"}), "P37"),
     (lambda f: f["localization"].update(speed_mps=0.3), "P38"),
 ])
 def test_each_blocking_condition_is_no_go(mutate, check_id):
@@ -112,8 +117,7 @@ def test_missing_sport_baseline_is_no_go_live_but_info_in_rehearsal():
     assert "P33" in {c.id for c in evaluate(good_facts(), cfg(sport_baseline=None)) if c.result == FAIL}
     f = good_facts()
     f["riskgraph_status"]["evidence_class"] = "rehearsal"
-    f["helix_evidence"] = {"D": {"verdict": "PASS", "rehearsal": True},
-                           "E": {"verdict": "PASS", "rehearsal": True}}
+    f["sink_evidence"] = {s: {"verdict": "PASS", "rehearsal": True, "git_sha": "abc"} for s in ("S0", "S1", "S2")}
     checks = evaluate(f, cfg(mode="rehearsal", sport_baseline=None))
     assert verdict(checks) == "GO"
 
@@ -139,13 +143,13 @@ def test_paths_are_absolute_and_keyed_by_map_id(tmp_path):
 def _results(ok=True):
     return {"status": "COMPLETED", "preflight_verdict": "GO", "operator_attested": True,
             "bag": {"ok": True, "message_count": 1000}, "trials": {
-        "A_baseline": {"plan": {"side": "left"}, "execution": {"succeeded": True, "arbiter": {"nonzero_while_hold": 0},
+        "A_baseline": {"plan": {"side": "left"}, "execution": {"succeeded": True, "sink": {"rejects": 0},
                                                               "post": {"stationary_after": True}}},
         "B_inject": {"row_ok": True, "position_error_m": 0.0, "db_path": "/db", "incidents_before": 0,
                      "incidents_after": 1, "nav2_received": True},
         "C_risk_aware": {"plan": {"side": "right"}, "comparison": {"risk_reduced": True, "pass": True},
                          "execution": {"succeeded": True, "executed_side": "right" if ok else "left",
-                                       "arbiter": {"nonzero_while_hold": 0},
+                                       "sink": {"rejects": 0},
                                        "post": {"stationary_after": True}},
                          "executed_comparison": {"risk_reduced": True}},
         "D_restart": {"instance_before": "a", "instance_after": "b", "incidents_before": 1,
@@ -218,3 +222,11 @@ def test_hardware_pass_is_impossible_for_rehearsal(tmp_path):
     rep3 = build_report(str(tmp_path), {"evidence_class": "hardware", "db_path": "/db", "label": "HW"},
                         _results(), _Ros(), info)
     assert rep3["hardware_pass"] is True
+
+
+def test_report_fails_when_the_sink_rejected_a_command(tmp_path):
+    r = _results()
+    _bundle(tmp_path)
+    r["trials"]["C_risk_aware"]["execution"]["sink"]["rejects"] = 1
+    c = {x["id"]: x["pass"] for x in criteria(r, {"db_path": "/db"}, str(tmp_path))}
+    assert c["12"] is False

@@ -25,14 +25,9 @@
 /compute_path_to_pose/_action/status
 /follow_path/_action/status
 /follow_path/_action/feedback
-# authorized motion path (HELIX arbiter + sport sink) and robot answers
+# authorized motion path (RiskGraph sport sink) and robot answers
 /cmd_vel
-/helix/arbiter/status
-/helix/hold
-/helix/faults
-/helix/recovery_hints
-/helix/recovery_actions
-/helix/sink/trace
+/riskgraph/sink/trace
 /api/sport/request
 /api/sport/response
 # diagnostics
