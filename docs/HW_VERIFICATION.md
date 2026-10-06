@@ -100,10 +100,15 @@ The lab network has no internet (field notes section 7). Stage everything.
    source install/setup.bash && python3 -m pytest tests/integration  # all pass
    ./scripts/rehearse_live_trial.sh <helix_rehearsal_session>        # RESULT: COMPLETED, machine checks PASS
    ```
-   (`<helix_rehearsal_session>` comes from HELIX `scripts/hw_rehearsal.sh <dir>`.)
+   (`<helix_rehearsal_session>` comes from HELIX `scripts/hw_rehearsal.sh <dir>`. Run that
+   with `RMW_IMPLEMENTATION=rmw_cyclonedds_cpp` and
+   `CYCLONEDDS_URI=file://$HOME/Projects/personal/riskgraph-go2/tests/integration/cyclonedds_loopback.xml`: on the default
+   Fast DDS a lifecycle reply to the launch is lost, `helix_recovery_node` stays
+   inactive, and stage A fails C2/C11/C12.)
 2. Copy this repo at that SHA to the payload and build it there, next to the
    HELIX workspace and the unitree_ros2 workspace (`unitree_api`, `unitree_go`).
-3. Confirm Nav2 is installed **on the payload** (it has never been checked there):
+3. Confirm Nav2 is still installed **on the payload** (it was on 2026-09-18, section 12;
+   re-check if the payload image changed):
    ```bash
    for p in nav2_map_server nav2_planner nav2_navfn_planner nav2_controller \
             nav2_regulated_pure_pursuit_controller nav2_velocity_smoother \
@@ -287,6 +292,7 @@ Replay parity afterwards (off-robot): `./scripts/replay_trial_bag.sh <run_dir>`.
 | P35 HELIX holding | HELIX saw a fault: check T1, wait for release; a trial under a hold is confounded |
 | P37 FAIL | HELIX stages D/E have not passed on this robot today |
 | Trial C refuses to arm | the plan did not change corridor: check `ros2 topic echo --once /riskgraph/status`, and that `/global_costmap/costmap` is high at the event |
+| Post-launch preflight NO-GO with many facts `None` (P17, P21, P27, P28, P35, P36) while the graph checks (P12, P26, P31 to P34) pass | Seen intermittently in off-robot rehearsal (2026-10-06), cause not yet found. Fail-safe: nothing moves. Re-run the runner once with a new `--db-tag`; if it repeats, keep the evidence bundle |
 | robot does not move after arming | sink not armed, arbiter holding, or the gait does not respond to 0.2 m/s (section 11) |
 
 Useful: `ros2 topic echo --once /riskgraph/localization/status`,
@@ -296,9 +302,11 @@ Useful: `ros2 topic echo --once /riskgraph/localization/status`,
 ## 11. Known limitations and hardware-only unknowns
 
 * **Gait at Nav2 speeds.** Nav2 commands <= 0.20 m/s with gentle yaw while
-  walking. The GO2 moved at 0.15 m/s in HELIX stage D; whether mcf tracks
-  combined forward + yaw well enough to follow the curve round the box is
-  unmeasured (the gait notes say combined commands degrade).
+  walking. The GO2 has tracked a straight 0.15 m/s command for 2 s (field notes
+  section 4), but HELIX stage D has **not** run on this robot yet, and nothing has
+  driven it at Nav2 speeds with yaw. The field notes put a clean trot at
+  `vx >= 0.5` and say combined forward + yaw degrades, so expect a shaky gait;
+  whether it still follows the curve round the box first shows in Trial A.
 * **Odometry drift.** Odometry cannot see its own drift, so the map is
   re-anchored on the physical marker before every trial and the pre-anchor
   error is recorded as measured drift (`summary.json` `anchors`). Drift
@@ -332,7 +340,7 @@ which keeps the real topics.
 | Check | Result |
 |---|---|
 | Workspace builds on the payload, offline | PASS, 7 packages |
-| Memory stack starts on the payload | FAIL as shipped at `8d666bf`: tf2_ros 0.25.20 on the payload rejects `TransformListener(buffer, None)`. Fixed in `f3177d3`, after which memory, planner and explainer report ready (schema v2) |
+| Memory stack starts on the payload | FAIL as shipped at `8d666bf`: tf2_ros 0.25.20 on the payload rejects `TransformListener(buffer, None)`. Fixed in `f3177d3`, after which memory, planner and explainer report ready (schema v2). That fix's listener node inherited launch's `__node` remap, so the graph held two `/riskgraph_memory` nodes and live preflight P12/P26 would refuse the trial; fixed in `a68441f`, so build at least that on the payload |
 | Nav2 lifecycle with outputs sunk | PASS, all managed nodes active about 3 s after launch; only the prefixed velocity topics exist |
 | Anchoring and TF on live `/utlidar/robot_odom` | PASS, anchored on the first stationary window; `map`->`base_link` resolves; TF at 41.6 Hz |
 | "Transform data too old" in the controller (Humble MessageFilter stall) | 0 occurrences over about 60 s at rest |
